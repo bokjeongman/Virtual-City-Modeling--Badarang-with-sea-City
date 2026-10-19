@@ -10,7 +10,7 @@ import model
 
 
 class CityApp:
-    CELL = 90
+    CELL = 40
     LEFT = 38
     TOP = 30
 
@@ -78,9 +78,8 @@ class CityApp:
         presets = ttk.Frame(outer)
         presets.pack(fill="x", pady=(0, 5))
         for text, name in (
-            ("기본 도시", "default"),
-            ("산업시설 인접 도시", "industry"),
-            ("빈 지도", "empty"),
+            ("해변형", "beach"),
+            ("입구형", "entrance"),
         ):
             ttk.Button(presets, text=text, command=lambda value=name: self.use_preset(value)).pack(
                 side="left", padx=(0, 6)
@@ -89,58 +88,17 @@ class CityApp:
         ttk.Button(presets, text="저장", command=self.save_file).pack(side="right")
 
         self.edit_widgets = []
-        zone_tools = ttk.Frame(outer)
-        zone_tools.pack(fill="x", pady=(0, 5))
-        ttk.Label(zone_tools, text="용도지역  ").pack(side="left")
-        for text, value in (
-            ("조회", "inspect"),
-            ("주거 R", "zone_R"),
-            ("상업 C", "zone_C"),
-            ("산업 I", "zone_I"),
-            ("지정 해제", "zone_none"),
-        ):
-            radio = ttk.Radiobutton(zone_tools, text=text, value=value, variable=self.mode)
-            radio.pack(side="left", padx=(0, 13))
-            if value != "inspect":
-                self.edit_widgets.append(radio)
-        building_tools = ttk.Frame(outer)
-        building_tools.pack(fill="x", pady=(0, 7))
-        ttk.Label(building_tools, text="시설 배치  ").pack(side="left")
-        for text, value in (
-            ("도로", "road"),
-            ("주택", "house"),
-            ("상점", "shop"),
-            ("공장", "factory"),
-            ("공원", "park"),
-            ("삭제", "erase"),
-        ):
-            radio = ttk.Radiobutton(building_tools, text=text, value=value, variable=self.mode)
-            radio.pack(side="left", padx=(0, 16))
-            self.edit_widgets.append(radio)
-
-        demand_box = ttk.Frame(zone_tools)
-        demand_box.pack(side="right")
-        ttk.Label(demand_box, text="입주 대기 인구 ").pack(side="left")
-        demand_entry = ttk.Entry(
-            demand_box, textvariable=self.demand_input, width=5, justify="right"
-        )
-        demand_entry.pack(side="left", padx=(0, 4))
-        demand_entry.bind("<Return>", lambda event: self.change_demand())
-        ttk.Label(demand_box, text="명 ").pack(side="left")
-        demand_apply = ttk.Button(demand_box, text="적용", command=self.change_demand, width=5)
-        demand_apply.pack(side="left")
-        self.edit_widgets.extend([demand_entry, demand_apply])
-
+        
         stats = ttk.Frame(outer)
         stats.pack(fill="x", pady=(0, 7))
         ttk.Label(stats, textvariable=self.summary, style="Stats.TLabel").pack(side="left")
-        ttk.Button(stats, text="1일 진행", command=self.advance_day).pack(side="right", padx=(7, 0))
+        ttk.Button(stats, text="다음 시간대 >", command=self.advance_day).pack(side="right", padx=(7, 0))
         ttk.Button(stats, text="실험 시작으로", command=self.reset_experiment).pack(side="right")
 
         # 상태 메시지 공간을 먼저 확보한다.
         footer = ttk.Frame(outer)
         footer.pack(side="bottom", fill="x")
-        ttk.Separator(footer).pack(fill="x", pady=(5, 4))
+        ttk.Separator(footer).pack(fill="x", pady=(14, 10))
         ttk.Label(footer, textvariable=self.status, wraplength=1010, foreground="#15517a").pack(
             anchor="w", pady=(4, 0)
         )
@@ -151,21 +109,15 @@ class CityApp:
         map_side.pack(side="left", anchor="n")
         self.canvas = tk.Canvas(
             map_side,
-            width=500,
-            height=405,
+            width=self.LEFT + city_data.WIDTH * self.CELL + 10,
+            height=self.TOP + city_data.HEIGHT * self.CELL + 10,
             background="white",
             highlightthickness=1,
             highlightbackground="#b8bec4",
         )
         self.canvas.pack(anchor="nw")
         self.canvas.bind("<Button-1>", self.click_map)
-        ttk.Label(map_side, text="R: 주거 · C: 상업 · I: 산업   |   셀 왼쪽 위: 용도지역").pack(
-            anchor="w", pady=(4, 0)
-        )
-        ttk.Label(
-            map_side, text="초록: 공원 · 회색: 도로 · 파랑: 물   |   건물 아래: 점유량 / 수용량"
-        ).pack(anchor="w", pady=(2, 0))
-
+        
         right = ttk.Frame(body, padding=(16, 0, 0, 0))
         right.pack(side="left", fill="both", expand=True)
         inspector_frame = ttk.LabelFrame(right, text="선택한 셀", padding=10)
@@ -178,15 +130,15 @@ class CityApp:
         history_frame.pack(fill="both", expand=True, pady=(10, 0))
         self.tree = ttk.Treeview(
             history_frame,
-            columns=("day", "population", "demand", "departed"),
+            columns=("day", "weekday", "phase", "population"),
             show="headings",
             height=5,
         )
         for column, title, width in (
-            ("day", "일", 50),
+            ("day", "일차", 60),
+            ("weekday", "요일", 60),
+            ("phase", "시간대", 70),
             ("population", "전체 인구", 95),
-            ("demand", "입주 대기", 95),
-            ("departed", "누적 전출", 95),
         ):
             self.tree.heading(column, text=title)
             self.tree.column(column, width=width, minwidth=45, anchor="center")
@@ -231,11 +183,20 @@ class CityApp:
 
         building = self.city["buildings"][building_id]
         kind = building["kind"]
-        label = {"house": "주택", "shop": "상점", "factory": "공장", "park": "공원"}[kind]
+        label = {"house": "주택", "shop": "상점", "factory": "공장", "park": "공원", "lodging": "숙소", "mart": "창고형 마트"}[kind]
         state = {"operating": "운영 중", "construction": "건설 중", "closed": "운영 중지"}[
             building["status"]
         ]
         lines.extend([f"건물: {building_id} ({label})   |   {state}"])
+        if kind == "lodging":
+            lines.append(f"투숙객 / 수용 인원: {building['guests']} / {building['capacity']}명")
+            return "\n".join(lines)
+
+        if kind == "mart":
+            cells = ", ".join(f"({x}, {y})" for x, y in building["cells"])
+            lines.append(f"사용하는 칸: {cells}")
+            return "\n".join(lines)
+
         if kind == "park":
             return "\n".join(lines)
 
@@ -282,8 +243,9 @@ class CityApp:
         population = self._derived(
             "전체 인구 계산", lambda: model.total_population(deepcopy(self.city))
         )
+        layout = {"beach": "해변형", "entrance": "입구형"}[self.city["layout"]]
         self.summary.set(
-            f"{self.city['day']}일   인구 {population}   대기 {self.city['demand']}   전출 {self.city['departed']}   예산 {self.city['budget']}"
+            f"{layout} 배치   |   {city_data.time_label(self.city)}   |   인구 {population}명"
         )
         self.demand_input.set(str(self.city["demand"]))
 
@@ -296,13 +258,14 @@ class CityApp:
         self.inspector.set(self._inspector_text())
         self._draw_map()
 
-        row = (self.city["day"], population, self.city["demand"], self.city["departed"])
+        weekday = city_data.WEEKDAYS[(self.city["day"] - 1) % 7]
+        phase = "낮" if self.city["phase"] == "day" else "저녁"
+        row = (self.city["day"], weekday, phase, population)
         if record:
-            if self.history and self.history[-1][0] == row[0]:
+            if self.history and self.history[-1][:3] == row[:3]:
                 self.history[-1] = row
             else:
                 self.history.append(row)
-
         self.tree.delete(*self.tree.get_children())
         for values in self.history:
             item = self.tree.insert("", "end", values=values)
@@ -311,6 +274,37 @@ class CityApp:
 
         if self._derived_error is not None:
             self._fail(*self._derived_error)
+
+    def _is_road(self, x, y):
+        """지도 안이고 도로 칸이면 True. 지도 밖은 도로가 아닌 것으로 본다."""
+        if not (0 <= x < city_data.WIDTH and 0 <= y < city_data.HEIGHT):
+            return False
+        return self.city["grid"][y][x]["road"]
+
+    def _draw_road(self, x, y, left, top, right, bottom):
+        """옆 칸이 도로면 가로 띠, 위아래 칸이 도로면 세로 띠를 그린다."""
+        c = self.canvas
+        cx, cy = (left + right) / 2, (top + bottom) / 2
+        half = 7
+
+        horizontal = self._is_road(x - 1, y) or self._is_road(x + 1, y)
+        vertical = self._is_road(x, y - 1) or self._is_road(x, y + 1)
+
+        if horizontal:
+            # 옆에 도로가 있는 쪽은 칸 끝까지, 없는 쪽은 가운데까지만
+            x0 = left if self._is_road(x - 1, y) else cx - half
+            x1 = right if self._is_road(x + 1, y) else cx + half
+            c.create_rectangle(x0, cy - half, x1, cy + half, fill="#818998", outline="")
+        if vertical:
+            y0 = top if self._is_road(x, y - 1) else cy - half
+            y1 = bottom if self._is_road(x, y + 1) else cy + half
+            c.create_rectangle(cx - half, y0, cx + half, y1, fill="#818998", outline="")
+
+        # 점선은 회색 띠를 다 그린 뒤에 위에 얹는다.
+        if horizontal:
+            c.create_line(x0 + 3, cy, x1 - 3, cy, fill="white", width=2, dash=(5, 4))
+        if vertical:
+            c.create_line(cx, y0 + 3, cx, y1 - 3, fill="white", width=2, dash=(5, 4))        
 
     def _draw_map(self):
         c = self.canvas
@@ -322,84 +316,90 @@ class CityApp:
             "shop": "#cbdcf7",
             "factory": "#d7c5e7",
             "park": "#cee7c7",
+            "lodging": "#e3d4f2",
         }
 
-        for x in range(5):
-            c.create_text(self.LEFT + (x + 0.5) * self.CELL, 17, text=str(x), font=(family, 13))
-        for y in range(4):
-            c.create_text(20, self.TOP + (y + 0.5) * self.CELL, text=str(y), font=(family, 13))
-            for x in range(5):
+        for x in range(city_data.WIDTH):
+            c.create_text(self.LEFT + (x + 0.5) * self.CELL, 17, text=str(x), font=(family, 10))
+        for y in range(city_data.HEIGHT):
+            c.create_text(20, self.TOP + (y + 0.5) * self.CELL, text=str(y), font=(family, 10))
+            for x in range(city_data.WIDTH):
                 cell = self.city["grid"][y][x]
                 left, top = self.LEFT + x * self.CELL, self.TOP + y * self.CELL
                 right, bottom = left + self.CELL, top + self.CELL
-                fill = "#d7ecfa" if cell["terrain"] == "water" else zone_fills[cell["zone"]]
-                c.create_rectangle(left, top, right, bottom, fill=fill, outline="#b8bec4")
                 if cell["terrain"] == "water":
+                    fill = "#d7ecfa"
+                elif cell["terrain"] == "beach":
+                    fill = "#f7e3a3"
+                else:
+                    fill = zone_fills[cell["zone"]]
+                c.create_rectangle(left, top, right, bottom, fill=fill, outline="#b8bec4")
+                if cell["terrain"] in ("water", "beach"):
                     c.create_text(
                         (left + right) / 2,
                         (top + bottom) / 2,
-                        text="물",
+                        text="바다" if cell["terrain"] == "water" else "해변",
                         fill="#326984",
-                        font=(family, 15),
+                        font=(family, 10),
                     )
                 if cell["road"]:
-                    c.create_rectangle(
-                        left + 1, top + 22, right - 1, bottom - 22, fill="#818993", outline=""
-                    )
-                    c.create_line(
-                        left + 5,
-                        (top + bottom) / 2,
-                        right - 5,
-                        (top + bottom) / 2,
-                        fill="white",
-                        width=2,
-                        dash=(9, 7),
-                    )
+                    self._draw_road(x, y, left, top, right, bottom)
                 if cell["zone"] is not None:
                     c.create_text(
-                        left + 11,
-                        top + 11,
+                        left + 6,
+                        top + 6,
                         text=cell["zone"],
                         fill="#51545d",
-                        font=(family, 10, "bold"),
+                        font=(family, 7, "bold"),
                     )
                 building_id = cell["building_id"]
-                if building_id is not None:
+                if building_id is not None and self.city["buildings"][building_id]["kind"] != "mart":
                     building = self.city["buildings"][building_id]
                     kind = building["kind"]
                     fill = building_fills[kind] if building["status"] == "operating" else "#dedede"
                     c.create_rectangle(
-                        left + 10,
-                        top + 22,
-                        right - 10,
-                        bottom - 9,
+                        left + 4,
+                        top + 8,
+                        right - 4,
+                        bottom - 3,
                         fill=fill,
                         outline="#535b62",
-                        width=2,
+                        width=1,
                     )
                     c.create_text(
-                        (left + right) / 2, top + 40, text=building_id, font=(family, 14, "bold")
+                        (left + right) / 2, top + 17, text=building_id, font=(family, 8, "bold")
                     )
                     if kind == "park":
                         label = "공원"
+                    elif kind == "lodging":
+                        label = f"{building['guests']}/{building['capacity']}"
                     else:
                         quantity = (
                             building["population"] if kind == "house" else building["workers"]
                         )
-                        label = f"{quantity} / {building['capacity']}"
-                    c.create_text((left + right) / 2, top + 65, text=label, font=(family, 12))
+                        label = f"{quantity}/{building['capacity']}"
+                    c.create_text((left + right) / 2, top + 29, text=label, font=(family, 7))
                 if self.selected == (x, y):
                     c.create_rectangle(
-                        left + 3, top + 3, right - 3, bottom - 3, outline="#1d6eae", width=3
+                        left + 2, top + 2, right - 2, bottom - 2, outline="#1d6eae", width=2
                     )
+        mart = self.city["buildings"].get("M")
+        if mart is not None:
+            xs = [x for x, _ in mart["cells"]]
+            ys = [y for _, y in mart["cells"]]
+            left = self.LEFT + min(xs) * self.CELL
+            top = self.TOP + min(ys) * self.CELL
+            right = self.LEFT + (max(xs) + 1) * self.CELL
+            bottom = self.TOP + (max(ys) + 1) * self.CELL
+            c.create_rectangle(
+                left + 4, top + 4, right - 4, bottom - 4, fill="#f6c9b8", outline="#535b62", width=2
+            )
+            c.create_text((left + right) / 2, (top + bottom) / 2 - 8, text="M", font=(family, 11, "bold"))
+            c.create_text((left + right) / 2, (top + bottom) / 2 + 9, text="창고형 마트", font=(family, 8))
 
     def use_preset(self, name):
         try:
-            candidate = (
-                city_data.make_empty_city()
-                if name == "empty"
-                else city_data.make_city(scenario=name)
-            )
+            candidate = city_data.make_city(name)
             city_data.validate_city(candidate)
         except Exception as error:
             self._fail("지도 선택", error)
@@ -419,7 +419,7 @@ class CityApp:
     def click_map(self, event):
         x = (event.x - self.LEFT) // self.CELL
         y = (event.y - self.TOP) // self.CELL
-        if not (0 <= x < 5 and 0 <= y < 4):
+        if not (0 <= x < city_data.WIDTH and 0 <= y < city_data.HEIGHT):
             return
 
         self.selected = (x, y)
@@ -480,20 +480,22 @@ class CityApp:
     def advance_day(self):
         before = deepcopy(self.city)
         try:
-            # 검증을 통과한 다음 상태만 실제 도시에 반영한다.
-            candidate = model.step(deepcopy(before))
+            candidate = deepcopy(before)
+            if candidate["phase"] == "day":
+                candidate["phase"] = "evening"
+            else:
+                candidate["phase"] = "day"
+                candidate["day"] += 1
             city_data.validate_city(candidate)
-            if candidate["day"] != before["day"] + 1:
-                raise ValueError("step()은 day를 정확히 1 증가시킨 새 도시를 반환해야 합니다.")
         except Exception as error:
-            self._fail("1일 진행", error)
+            self._fail("시간 진행", error)
             return
 
         if not self.has_stepped:
             self.baseline = before
             self.has_stepped = True
         self.city = candidate
-        self.status.set(f"{self.city['day']}일로 진행했습니다.")
+        self.status.set(f"{city_data.time_label(self.city)}이 되었습니다.")
         self.refresh(record=True)
 
     def reset_experiment(self):

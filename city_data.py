@@ -3,11 +3,11 @@
 import json
 from pathlib import Path
 
-WIDTH = 5
-HEIGHT = 4
+WIDTH = 14
+HEIGHT = 10
 STATUSES = ("construction", "operating", "closed")
 ZONES = (None, "R", "C", "I")
-KINDS = ("house", "park", "shop", "factory")
+KINDS = ("house", "park", "shop", "factory", "lodging", "mart")
 
 
 def make_empty_city():
@@ -19,11 +19,15 @@ def make_empty_city():
             row.append({"terrain": "land", "road": False, "zone": None, "building_id": None})
         grid.append(row)
 
-    grid[0][4]["terrain"] = "water"
-    grid[1][4]["terrain"] = "water"
+    for x in range(WIDTH):
+        grid[7][x]["terrain"] = "beach"
+        grid[8][x]["terrain"] = "water"
+        grid[9][x]["terrain"] = "water"
 
     return {
-        "day": 0,
+        "day": 1,
+        "phase": "day",
+        "layout": "beach",
         "budget": 100,
         "demand": 3,
         "departed": 0,
@@ -33,45 +37,65 @@ def make_empty_city():
         "external_power": True,
     }
 
+MART_CELLS = {
+    "beach": [[10, 3], [11, 3], [10, 4], [11, 4]], # 해변형
+    "entrance": [[1, 3], [2, 3], [1, 4], [2, 4]], # 입구형
+}
 
-def make_city(scenario="default"):
-    """기본 또는 산업 조건의 도시를 만든다. 알려지지 않은 조건은 ValueError로 알린다."""
-    if scenario not in ("default", "industry"):
-        raise ValueError("시나리오는 default 또는 industry여야 합니다.")
+def make_city(layout="beach"):
+    """해변형 또는 입구형 배치의 도시를 만든다. 건물과 도로를 배치한다."""
+    if layout not in ("beach", "entrance"):
+        raise ValueError("배치는 beach 또는 entrance여야 합니다.")
 
     city = make_empty_city()
-    for x in range(4):
+    for x in range(WIDTH):
         city["grid"][2][x]["road"] = True
+    for y in range(3, 6):
+        city["grid"][y][9]["road"] = True
+    for z in range(5, 13):
+        city["grid"][6][z]["road"] = True
 
-    for ident, x, population in [("A", 1, 6), ("B", 3, 8)]:
+    houses = [(2, 1), (4, 1), (6, 1), (11, 1), (4, 3), (6, 3), (8, 5), (10, 5)]
+    for number, (x, y) in enumerate(houses, start=1):
+        ident = f"H{number}"
         city["buildings"][ident] = {
             "id": ident,
             "kind": "house",
             "x": x,
-            "y": 1,
-            "population": population,
+            "y": y,
+            "population": 3,
             "capacity": 10,
             "status": "operating",
         }
-        city["grid"][1][x]["zone"] = "R"
-        city["grid"][1][x]["building_id"] = ident
+        city["grid"][y][x]["zone"] = "R"
+        city["grid"][y][x]["building_id"] = ident
 
-    city["buildings"]["P"] = {"id": "P", "kind": "park", "x": 2, "y": 1, "status": "operating"}
-    city["grid"][1][2]["building_id"] = "P"
-    if scenario == "industry":
-        city["demand"] = 5
-        city["buildings"]["I"] = {
-            "id": "I",
-            "kind": "factory",
-            "x": 3,
-            "y": 0,
-            "workers": 4,
+    for number, (x, y) in enumerate([(6, 5), (12, 5)], start=1):
+        ident = f"L{number}"
+        city["buildings"][ident] = {
+            "id": ident,
+            "kind": "lodging",
+            "x": x,
+            "y": y,
+            "guests": 0,
             "capacity": 10,
             "status": "operating",
         }
-        city["grid"][0][3]["zone"] = "I"
-        city["grid"][0][3]["building_id"] = "I"
+        city["grid"][y][x]["building_id"] = ident
 
+    mart_cells = [list(cell) for cell in MART_CELLS[layout]] # 배치에 따라 고르기
+    city["buildings"]["M"] = {
+        "id": "M",
+        "kind": "mart",
+        "x": mart_cells[0][0],
+        "y": mart_cells[0][1],
+        "cells": mart_cells,
+        "status": "operating",
+    }
+    for x, y in mart_cells:
+        city["grid"][y][x]["building_id"] = "M"
+
+    city["layout"] = layout
     return city
 
 
@@ -98,9 +122,11 @@ def validate_city(city):
     """도시 구조, 용도지역과 건물 / 셀 참조를 검증한다. 잘못된 상태는 ValueError로 알린다."""
     _fields(
         city,
-        ["day", "budget", "demand", "departed", "grid", "buildings", "rules", "external_power"],
+        ["day", "phase", "layout", "budget", "demand", "departed", "grid", "buildings", "rules", "external_power"],
         "도시",
     )
+    if city["phase"] not in ("day", "evening"):
+        raise ValueError("phase는 day 또는 evening이어야 합니다.")
     for name in ("day", "demand", "departed"):
         _nonnegative_integer(city[name], name)
     if type(city["budget"]) is not int:
@@ -131,8 +157,8 @@ def validate_city(city):
             if id(cell) in seen_cells:
                 raise ValueError("여러 좌표가 같은 셀 dict를 공유합니다. 셀을 각각 생성하세요.")
             seen_cells.add(id(cell))
-            if cell["terrain"] not in ("land", "water"):
-                raise ValueError(label + "의 terrain은 land 또는 water여야 합니다.")
+            if cell["terrain"] not in ("land", "water", "beach"):
+                raise ValueError(label + "의 terrain은 land 또는 water 또는 beach 여야 합니다.")
             if type(cell["road"]) is not bool:
                 raise ValueError(label + "의 road는 True 또는 False여야 합니다.")
             if cell["zone"] not in ZONES:
@@ -142,10 +168,10 @@ def validate_city(city):
                 raise ValueError(
                     label + "의 building_id는 비어 있지 않은 문자열 또는 None이어야 합니다."
                 )
-            if cell["terrain"] == "water" and (
+            if cell["terrain"] != "land" and (
                 cell["road"] or cell["zone"] is not None or ident is not None
             ):
-                raise ValueError(label + ": 물 위에는 도로·용도지역·건물을 둘 수 없습니다.")
+                raise ValueError(label + ": 바다와 해수욕장에는 도로·용도지역·건물을 둘 수 없습니다.")
             if cell["road"] and (ident is not None or cell["zone"] is not None):
                 raise ValueError(label + ": 도로 셀에는 용도지역이나 건물을 둘 수 없습니다.")
             if ident is not None and ident not in buildings:
@@ -164,6 +190,10 @@ def validate_city(city):
         names = ["id", "kind", "x", "y", "status"]
         if kind == "house":
             names += ["population", "capacity"]
+        elif kind == "lodging":
+            names += ["guests", "capacity"]
+        elif kind == "mart":
+            names += ["cells"]
         elif kind in ("shop", "factory"):
             names += ["workers", "capacity"]
         _fields(building, names, "건물 " + ident)
@@ -172,8 +202,8 @@ def validate_city(city):
         _check_position(building["x"], building["y"])
         if building["status"] not in STATUSES:
             raise ValueError("건물 상태는 construction/operating/closed 중 하나여야 합니다.")
-        if kind != "park":
-            quantity = "population" if kind == "house" else "workers"
+        if kind not in ("park", "mart"):
+            quantity = {"house": "population", "lodging": "guests"}.get(kind, "workers")
             _nonnegative_integer(building[quantity], ident + "의 " + quantity)
             _nonnegative_integer(building["capacity"], ident + "의 capacity")
             if building[quantity] > building["capacity"]:
@@ -188,6 +218,8 @@ def validate_city(city):
             ident = cell["building_id"]
             if ident is not None:
                 building = buildings[ident]
+                if building["kind"] == "mart" and [x, y] in building["cells"]:
+                    continue
                 if (building["x"], building["y"]) != (x, y):
                     raise ValueError("셀 " + repr((x, y)) + "이 다른 좌표의 건물을 참조합니다.")
 
@@ -256,3 +288,16 @@ def load_city(path):
 
     validate_city(city)
     return city
+
+WEEKDAYS = ("월", "화", "수", "목", "금", "토", "일")
+
+def is_weekend(city):
+    """요일 번호가 주말이면 True를 반환한다. 0=월, 6=일"""
+    return WEEKDAYS[(city["day"] - 1) % 7] in ("토", "일")
+
+def time_label(city):
+    """'6일차 토요일 저녁 (주말)' 같은 글자를 만든다."""
+    weekday = WEEKDAYS[(city["day"] - 1) % 7]
+    phase = "낮" if city["phase"] == "day" else "저녁"
+    kind = "주말" if is_weekend(city) else "평일"
+    return f"{city['day']}일차 {weekday}요일 {phase} ({kind})"

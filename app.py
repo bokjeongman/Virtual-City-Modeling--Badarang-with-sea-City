@@ -13,7 +13,7 @@ def main():
 
     try:
         import tkinter
-        from service_gui import launch
+        from gui import launch
     except ImportError as error:
         print(f"실행에 필요한 모듈을 찾을 수 없습니다: {error}", file=sys.stderr)
         print(
