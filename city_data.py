@@ -66,6 +66,7 @@ def make_city(layout="beach"):
             "population": 3,
             "capacity": 10,
             "status": "operating",
+            "mart_moves": None,
         }
         city["grid"][y][x]["zone"] = "R"
         city["grid"][y][x]["building_id"] = ident
@@ -91,6 +92,7 @@ def make_city(layout="beach"):
         "y": mart_cells[0][1],
         "cells": mart_cells,
         "status": "operating",
+        "resident_visitors": 0,
     }
     for x, y in mart_cells:
         city["grid"][y][x]["building_id"] = "M"
@@ -189,11 +191,11 @@ def validate_city(city):
             )
         names = ["id", "kind", "x", "y", "status"]
         if kind == "house":
-            names += ["population", "capacity"]
+            names += ["population", "capacity", "mart_moves"]
         elif kind == "lodging":
             names += ["guests", "capacity"]
         elif kind == "mart":
-            names += ["cells"]
+            names += ["cells", "resident_visitors"]
         elif kind in ("shop", "factory"):
             names += ["workers", "capacity"]
         _fields(building, names, "건물 " + ident)

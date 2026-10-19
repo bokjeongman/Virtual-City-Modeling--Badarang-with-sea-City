@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import filedialog, font as tkfont, ttk
 import traceback
 
+import badarang_rules
 import city_data
 import model
 
@@ -16,7 +17,7 @@ class CityApp:
 
     def __init__(self, root):
         self.root = root
-        root.title("가상 도시")
+        root.title("바다랑")
         width = min(1140, max(1040, root.winfo_screenwidth() - 80))
         height = min(780, max(700, root.winfo_screenheight() - 80))
         root.geometry(f"{width}x{height}")
@@ -33,7 +34,7 @@ class CityApp:
         self.summary = tk.StringVar()
         self.inspector = tk.StringVar()
         self.status = tk.StringVar(
-            value="도구를 선택하고 지도를 클릭하세요. 지도와 입주 대기 인구는 0일에 변경할 수 있습니다."
+            value="배치를 고르고 지도를 클릭해 칸 정보를 확인하세요. 시간은 '다음 시간대' 버튼으로 넘깁니다."
         )
         self.history = []
         self._derived_error = None
@@ -73,7 +74,7 @@ class CityApp:
     def _make_widgets(self):
         outer = ttk.Frame(self.root, padding=10)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="가상 도시", style="Title.TLabel").pack(anchor="w", pady=(0, 8))
+        ttk.Label(outer, text="바다랑: 바다의 활기와 마을의 일상이 공존하는 도시", style="Title.TLabel").pack(anchor="w", pady=(0, 8))
 
         presets = ttk.Frame(outer)
         presets.pack(fill="x", pady=(0, 5))
@@ -219,6 +220,8 @@ class CityApp:
         )
         lines.append(f"도로 접근성: {road}")
         if kind == "house":
+            moves = badarang_rules.mart_moves(self.city, building)
+            lines.append(f"마트까지 이동: {'도로로 갈 수 없음' if moves is None else f'{moves}회'}")
             snapshot = deepcopy(self.city)
             copied = snapshot["buildings"][building_id]
             score = self._derived(
@@ -244,8 +247,9 @@ class CityApp:
             "전체 인구 계산", lambda: model.total_population(deepcopy(self.city))
         )
         layout = {"beach": "해변형", "entrance": "입구형"}[self.city["layout"]]
+        visitors = self.city["buildings"]["M"]["resident_visitors"]
         self.summary.set(
-            f"{layout} 배치   |   {city_data.time_label(self.city)}   |   인구 {population}명"
+            f"{layout} 배치   |   {city_data.time_label(self.city)}   |   인구 {population}명   |   마트 방문객 {visitors}명"
         )
         self.demand_input.set(str(self.city["demand"]))
 
@@ -483,9 +487,11 @@ class CityApp:
             candidate = deepcopy(before)
             if candidate["phase"] == "day":
                 candidate["phase"] = "evening"
+                badarang_rules.run_shopping(candidate) # 저녁 장보기 시뮬레이션 실행
             else:
                 candidate["phase"] = "day"
                 candidate["day"] += 1
+                candidate["buildings"]["M"]["resident_visitors"] = 0 # 낮에 마트 방문객 0으로 초기화
             city_data.validate_city(candidate)
         except Exception as error:
             self._fail("시간 진행", error)
