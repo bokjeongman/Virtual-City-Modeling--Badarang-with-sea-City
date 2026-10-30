@@ -29,8 +29,6 @@ class CityApp:
         self.has_stepped = False
         self.selected = (1, 1)
 
-        self.mode = tk.StringVar(value="inspect")
-        self.demand_input = tk.StringVar(value=str(self.city["demand"]))
         self.summary = tk.StringVar()
         self.inspector = tk.StringVar()
         self.status = tk.StringVar(
@@ -87,8 +85,6 @@ class CityApp:
             )
         ttk.Button(presets, text="불러오기", command=self.load_file).pack(side="right", padx=(6, 0))
         ttk.Button(presets, text="저장", command=self.save_file).pack(side="right")
-
-        self.edit_widgets = []
         
         stats = ttk.Frame(outer)
         stats.pack(fill="x", pady=(0, 7))
@@ -170,8 +166,8 @@ class CityApp:
     def _inspector_text(self):
         x, y = self.selected
         cell = self.city["grid"][y][x]
-        terrain = "육지" if cell["terrain"] == "land" else "물"
-        zone = {None: "미지정", "R": "주거 (R)", "C": "상업 (C)", "I": "산업 (I)"}[cell["zone"]]
+        terrain = {"land": "육지", "beach": "해변", "water": "바다"}[cell["terrain"]]
+        zone = {None: "미지정", "R": "주거 (R)"}[cell["zone"]]
         lines = [
             f"좌표 ({x}, {y})   |   {terrain}   |   도로 {'있음' if cell['road'] else '없음'}",
             f"용도지역: {zone}",
@@ -184,7 +180,7 @@ class CityApp:
 
         building = self.city["buildings"][building_id]
         kind = building["kind"]
-        label = {"house": "주택", "shop": "상점", "factory": "공장", "park": "공원", "lodging": "숙소", "mart": "창고형 마트"}[kind]
+        label = {"house": "주택", "lodging": "숙소", "mart": "창고형 마트"}[kind]
         state = {"operating": "운영 중", "construction": "건설 중", "closed": "운영 중지"}[
             building["status"]
         ]
@@ -198,14 +194,8 @@ class CityApp:
             lines.append(f"사용하는 칸: {cells}")
             return "\n".join(lines)
 
-        if kind == "park":
-            return "\n".join(lines)
 
-        quantity = building["population"] if kind == "house" else building["workers"]
-        if kind == "house":
-            lines.append(f"인구 / 수용량: {quantity} / {building['capacity']}명")
-        else:
-            lines.append(f"점유 일자리 수 / 전체 일자리 수: {quantity} / {building['capacity']}개")
+        lines.append(f"인구 / 수용량: {building['population']} / {building['capacity']}명")
         ratio = self._derived(
             "점유율 조회", lambda: model.occupancy(deepcopy(building)), lambda value: f"{value:.0%}"
         )
@@ -219,25 +209,8 @@ class CityApp:
             lambda value: "충족" if value else "미충족",
         )
         lines.append(f"도로 접근성: {road}")
-        if kind == "house":
-            moves = badarang_rules.mart_moves(self.city, building)
-            lines.append(f"마트까지 이동: {'도로로 갈 수 없음' if moves is None else f'{moves}회'}")
-            snapshot = deepcopy(self.city)
-            copied = snapshot["buildings"][building_id]
-            score = self._derived(
-                "환경 점수 조회", lambda: model.environment_score(snapshot, copied)
-            )
-            lines.append(f"주변 환경 점수 E: {score}")
-            snapshot = deepcopy(self.city)
-            copied = snapshot["buildings"][building_id]
-            request = self._derived(
-                "입주·전출 요청 조회",
-                lambda: model.growth_request(snapshot, copied),
-                lambda value: f"{value[0]}명 / {value[1]}명",
-            )
-            lines.append(f"입주 요청량 / 전출량: {request}")
-        else:
-            lines.append("점유 일자리 수는 고정입니다.")
+        moves = badarang_rules.mart_moves(self.city, building)
+        lines.append(f"마트까지 이동: {'도로로 갈 수 없음' if moves is None else f'{moves}회'}")
 
         return "\n".join(lines)
 
@@ -251,13 +224,6 @@ class CityApp:
         self.summary.set(
             f"{layout} 배치   |   {city_data.time_label(self.city)}   |   인구 {population}명   |   마트 방문객 {visitors}명"
         )
-        self.demand_input.set(str(self.city["demand"]))
-
-        editing = self.city["day"] == 0
-        for widget in self.edit_widgets:
-            widget.configure(state="normal" if editing else "disabled")
-        if not editing:
-            self.mode.set("inspect")
 
         self.inspector.set(self._inspector_text())
         self._draw_map()
@@ -314,12 +280,15 @@ class CityApp:
         c = self.canvas
         c.delete("all")
         family = self.font_family
-        zone_fills = {None: "#f6f3e9", "R": "#fff5d6", "C": "#e6effb", "I": "#eee7f6"}
+        if self.city["phase"] == "day":
+            zone_fills = {None: "#f6f3e9", "R": "#fff5d6"}
+            water_fill, beach_fill = "#d7ecfa", "#f7e3a3"
+        else: # 저녁: 조금 더 어둡게
+            zone_fills = {None: "#d5d3de", "R": "#e2dbc4"}
+            water_fill, beach_fill = "#7f9cc3", "#d6c189"
+
         building_fills = {
             "house": "#f9e6a7",
-            "shop": "#cbdcf7",
-            "factory": "#d7c5e7",
-            "park": "#cee7c7",
             "lodging": "#e3d4f2",
         }
 
@@ -332,9 +301,9 @@ class CityApp:
                 left, top = self.LEFT + x * self.CELL, self.TOP + y * self.CELL
                 right, bottom = left + self.CELL, top + self.CELL
                 if cell["terrain"] == "water":
-                    fill = "#d7ecfa"
+                    fill = water_fill
                 elif cell["terrain"] == "beach":
-                    fill = "#f7e3a3"
+                    fill = beach_fill
                 else:
                     fill = zone_fills[cell["zone"]]
                 c.create_rectangle(left, top, right, bottom, fill=fill, outline="#b8bec4")
@@ -373,15 +342,10 @@ class CityApp:
                     c.create_text(
                         (left + right) / 2, top + 17, text=building_id, font=(family, 8, "bold")
                     )
-                    if kind == "park":
-                        label = "공원"
-                    elif kind == "lodging":
+                    if kind == "lodging":
                         label = f"{building['guests']}/{building['capacity']}"
                     else:
-                        quantity = (
-                            building["population"] if kind == "house" else building["workers"]
-                        )
-                        label = f"{quantity}/{building['capacity']}"
+                        label = f"{building['population']}/{building['capacity']}"
                     c.create_text((left + right) / 2, top + 29, text=label, font=(family, 7))
                 if self.selected == (x, y):
                     c.create_rectangle(
@@ -400,6 +364,42 @@ class CityApp:
             )
             c.create_text((left + right) / 2, (top + bottom) / 2 - 8, text="M", font=(family, 11, "bold"))
             c.create_text((left + right) / 2, (top + bottom) / 2 + 9, text="창고형 마트", font=(family, 8))
+        self._drawing_evening()
+        self._draw_time_badge()
+
+    def _drawing_evening(self):
+        """저녁 판정 결과를 지도 위에 그린다. 낮에는 아무것도 그리지 않는다."""
+        evening = self.city["evening"]
+        if evening is None:
+            return
+        c = self.canvas
+
+        # 혼잡 도로 표시: 칸 가운데에 네모
+        for x, y in evening["congested_roads"]:
+            cx = self.LEFT + (x + 0.5) * self.CELL
+            cy = self.TOP + (y + 0.5) * self.CELL
+            c.create_rectangle(cx - 9, cy - 9, cx + 9, cy + 9, fill="#e0483e", outline="")
+
+        # 혼잡 또는 소음에 노출된 주거 칸: 빨간 테두리
+        for x, y in evening["congested_homes"] + evening["noisy_homes"]:
+            left = self.LEFT + x * self.CELL
+            top = self.TOP + y * self.CELL
+            c.create_rectangle(left + 2, top + 5, left+self.CELL - 2, top+self.CELL - 1, outline="#e0483e", width=2)
+
+    def _draw_time_badge(self):
+        """지도 오른쪽 위에 지금 시간대와 요일을 크게 보여준다."""
+        c = self.canvas
+        is_day = self.city["phase"] == "day"
+
+        right = self.LEFT + city_data.WIDTH * self.CELL - 4
+        left = right - 110
+        top = self.TOP + 4
+        bottom = top + 32
+
+        c.create_rectangle(left, top, right, bottom, fill="#fff4c2" if is_day else "#2c3a5a", outline="")
+        text = f"{'낮' if is_day else '저녁'}"
+        c.create_text((left + right) / 2, (top + bottom) / 2, text=text, 
+                      font=(self.font_family, 13, "bold"), fill="#8a5a00" if is_day else "#ffe9a8")
 
     def use_preset(self, name):
         try:
@@ -417,7 +417,6 @@ class CityApp:
         self.baseline = deepcopy(city)
         self.has_stepped = False
         self.history = []
-        self.mode.set("inspect")
         self.refresh(record=True)
 
     def click_map(self, event):
@@ -427,58 +426,6 @@ class CityApp:
             return
 
         self.selected = (x, y)
-        mode = self.mode.get()
-        if mode == "inspect":
-            self.refresh()
-            return
-        if self.city["day"] != 0:
-            self.status.set("지도는 0일에만 편집할 수 있습니다.")
-            self.refresh()
-            return
-
-        candidate = deepcopy(self.city)
-        try:
-            if mode.startswith("zone_"):
-                zone = None if mode == "zone_none" else mode[-1]
-                city_data.edit_zone(candidate, x, y, zone)
-            elif mode == "road":
-                city_data.edit_road(candidate, x, y)
-            elif mode == "erase":
-                city_data.erase_at(candidate, x, y)
-            else:
-                model.place_building(candidate, x, y, mode)
-            city_data.validate_city(candidate)
-        except Exception as error:
-            self._fail("지도 편집", error)
-            self.refresh()
-            return
-
-        self.city = candidate
-        self.status.set(f"({x}, {y}) 셀을 변경했습니다.")
-        self.refresh(record=True)
-
-    def change_demand(self):
-        if self.city["day"] != 0:
-            self.demand_input.set(str(self.city["demand"]))
-            self.status.set("입주 대기 인구는 0일에만 변경할 수 있습니다.")
-            return
-
-        candidate = deepcopy(self.city)
-        try:
-            try:
-                candidate["demand"] = int(self.demand_input.get())
-            except ValueError as error:
-                raise ValueError("입주 대기 인구는 0 이상의 정수로 입력하세요.") from error
-            if candidate["demand"] < 0:
-                raise ValueError("입주 대기 인구는 0 이상의 정수로 입력하세요.")
-            city_data.validate_city(candidate)
-        except Exception as error:
-            self._fail("입주 대기 인구 변경", error)
-            self.demand_input.set(str(self.city["demand"]))
-            return
-
-        self.city = candidate
-        self.status.set("입주 대기 인구를 변경했습니다.")
         self.refresh(record=True)
 
     def advance_day(self):
@@ -492,6 +439,7 @@ class CityApp:
                 candidate["phase"] = "day"
                 candidate["day"] += 1
                 candidate["buildings"]["M"]["resident_visitors"] = 0 # 낮에 마트 방문객 0으로 초기화
+                candidate["evening"] = None # 저녁 장보기 기록 초기화
             city_data.validate_city(candidate)
         except Exception as error:
             self._fail("시간 진행", error)

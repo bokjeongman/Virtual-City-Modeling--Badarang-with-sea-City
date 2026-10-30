@@ -6,8 +6,8 @@ from pathlib import Path
 WIDTH = 14
 HEIGHT = 10
 STATUSES = ("construction", "operating", "closed")
-ZONES = (None, "R", "C", "I")
-KINDS = ("house", "park", "shop", "factory", "lodging", "mart")
+ZONES = (None, "R")
+KINDS = ("house", "lodging", "mart")
 
 
 def make_empty_city():
@@ -28,13 +28,9 @@ def make_empty_city():
         "day": 1,
         "phase": "day",
         "layout": "beach",
-        "budget": 100,
-        "demand": 3,
-        "departed": 0,
         "grid": grid,
         "buildings": {},
-        "rules": {"growth_per_day": 2, "tax_per_person_day": 3, "maintenance_per_day": 10},
-        "external_power": True,
+        "evening": None,
     }
 
 MART_CELLS = {
@@ -124,23 +120,13 @@ def validate_city(city):
     """도시 구조, 용도지역과 건물 / 셀 참조를 검증한다. 잘못된 상태는 ValueError로 알린다."""
     _fields(
         city,
-        ["day", "phase", "layout", "budget", "demand", "departed", "grid", "buildings", "rules", "external_power"],
-        "도시",
+        ["day", "phase", "layout", "grid", "buildings", "evening"], "도시"
     )
     if city["phase"] not in ("day", "evening"):
         raise ValueError("phase는 day 또는 evening이어야 합니다.")
-    for name in ("day", "demand", "departed"):
-        _nonnegative_integer(city[name], name)
-    if type(city["budget"]) is not int:
-        raise ValueError("budget은 정수 코인이어야 합니다. 음수 예산도 허용합니다.")
-    if city["external_power"] is not True:
-        raise ValueError("이 모델의 외부 전력은 True로 고정합니다.")
-
-    _fields(city["rules"], ["growth_per_day", "tax_per_person_day", "maintenance_per_day"], "규칙")
-    for name, value in city["rules"].items():
-        _nonnegative_integer(value, "규칙 " + name)
-    if city["rules"]["growth_per_day"] != 2:
-        raise ValueError("이 모델의 하루 최대 입주 요청량은 2명입니다.")
+    if city["evening"] is not None and type(city["evening"]) is not dict:
+        raise ValueError("evening은 None 또는 dict여야 합니다.")
+    _nonnegative_integer(city["day"], "day")
 
     grid = city["grid"]
     buildings = city["buildings"]
@@ -164,7 +150,7 @@ def validate_city(city):
             if type(cell["road"]) is not bool:
                 raise ValueError(label + "의 road는 True 또는 False여야 합니다.")
             if cell["zone"] not in ZONES:
-                raise ValueError(label + "의 zone은 None/R/C/I 중 하나여야 합니다.")
+                raise ValueError(label + "의 zone은 None 또는 R이어야 합니다.")
             ident = cell["building_id"]
             if ident is not None and (type(ident) is not str or not ident):
                 raise ValueError(
@@ -187,7 +173,7 @@ def validate_city(city):
         kind = building.get("kind")
         if kind not in KINDS:
             raise ValueError(
-                "건물 " + ident + "의 kind는 house/park/shop/factory 중 하나여야 합니다."
+                "건물 " + ident + "의 kind는 house/lodging/mart 중 하나여야 합니다."
             )
         names = ["id", "kind", "x", "y", "status"]
         if kind == "house":
@@ -196,16 +182,14 @@ def validate_city(city):
             names += ["guests", "capacity"]
         elif kind == "mart":
             names += ["cells", "resident_visitors"]
-        elif kind in ("shop", "factory"):
-            names += ["workers", "capacity"]
         _fields(building, names, "건물 " + ident)
         if building["id"] != ident:
             raise ValueError("buildings의 키와 건물의 id가 다릅니다: " + ident)
         _check_position(building["x"], building["y"])
         if building["status"] not in STATUSES:
             raise ValueError("건물 상태는 construction/operating/closed 중 하나여야 합니다.")
-        if kind not in ("park", "mart"):
-            quantity = {"house": "population", "lodging": "guests"}.get(kind, "workers")
+        if kind != "mart":
+            quantity = "population" if kind == "house" else "guests"
             _nonnegative_integer(building[quantity], ident + "의 " + quantity)
             _nonnegative_integer(building["capacity"], ident + "의 capacity")
             if building[quantity] > building["capacity"]:
@@ -226,51 +210,6 @@ def validate_city(city):
                     raise ValueError("셀 " + repr((x, y)) + "이 다른 좌표의 건물을 참조합니다.")
 
 
-def _check_edit(city, x, y):
-    validate_city(city)
-    _check_position(x, y)
-    if city["day"] != 0:
-        raise ValueError("지도 편집은 0일에만 가능합니다. 시작 상태로 돌아가세요.")
-
-
-def edit_zone(city, x, y, zone):
-    _check_edit(city, x, y)
-    if zone not in ZONES:
-        raise ValueError("용도지역은 None/R/C/I 중 하나여야 합니다.")
-
-    cell = city["grid"][y][x]
-    if cell["terrain"] != "land" or cell["road"]:
-        raise ValueError("용도지역은 도로가 없는 땅에만 지정할 수 있습니다.")
-    if cell["building_id"] is not None:
-        raise ValueError("건물이 있는 셀은 용도를 바꿀 수 없습니다. 먼저 건물을 삭제하세요.")
-
-    cell["zone"] = zone
-
-
-def edit_road(city, x, y):
-    _check_edit(city, x, y)
-    cell = city["grid"][y][x]
-    if cell["terrain"] != "land":
-        raise ValueError("도로는 땅에만 놓을 수 있습니다.")
-    if cell["building_id"] is not None:
-        raise ValueError("건물이 있는 셀에는 도로를 놓을 수 없습니다.")
-    if cell["zone"] is not None:
-        raise ValueError("먼저 용도지역을 해제하세요.")
-
-    cell["road"] = not cell["road"]
-
-
-def erase_at(city, x, y):
-    _check_edit(city, x, y)
-    cell = city["grid"][y][x]
-    ident = cell["building_id"]
-    if ident is not None:
-        del city["buildings"][ident]
-        cell["building_id"] = None
-
-    cell["road"] = False
-
-
 def save_city(city, path):
     validate_city(city)
     text = json.dumps(city, ensure_ascii=False, indent=2, allow_nan=False)
@@ -282,11 +221,6 @@ def load_city(path):
         city = json.loads(Path(path).read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError("UTF-8 형식의 올바른 도시 JSON 파일이 아닙니다.") from error
-
-    if type(city) is dict and "demand" not in city:
-        raise ValueError(
-            "지난주 도시 파일과 형식이 다릅니다. 이번 주 examples 폴더의 JSON을 사용하세요."
-        )
 
     validate_city(city)
     return city
