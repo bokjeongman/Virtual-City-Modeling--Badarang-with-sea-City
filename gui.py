@@ -35,6 +35,7 @@ class CityApp:
             value="배치를 고르고 지도를 클릭해 칸 정보를 확인하세요. 시간은 '다음 시간대' 버튼으로 넘깁니다."
         )
         self.history = []
+        self.baseline_history = []
         self._derived_error = None
 
         self._make_widgets()
@@ -127,15 +128,18 @@ class CityApp:
         history_frame.pack(fill="both", expand=True, pady=(10, 0))
         self.tree = ttk.Treeview(
             history_frame,
-            columns=("day", "weekday", "phase", "population"),
+            columns=("day", "weekday", "residents", "tourists", "congested", "damaged", "population"),
             show="headings",
             height=5,
         )
         for column, title, width in (
-            ("day", "일차", 60),
-            ("weekday", "요일", 60),
-            ("phase", "시간대", 70),
-            ("population", "전체 인구", 95),
+            ("day", "일차", 45),
+            ("weekday", "요일", 45),
+            ("residents", "주민 방문객", 75),
+            ("tourists", "관광객", 55),
+            ("congested", "혼잡 도로", 65),
+            ("damaged", "피해", 70),
+            ("population", "전체 인구", 80),
         ):
             self.tree.heading(column, text=title)
             self.tree.column(column, width=width, minwidth=45, anchor="center")
@@ -228,14 +232,7 @@ class CityApp:
         self.inspector.set(self._inspector_text())
         self._draw_map()
 
-        weekday = city_data.WEEKDAYS[(self.city["day"] - 1) % 7]
-        phase = "낮" if self.city["phase"] == "day" else "저녁"
-        row = (self.city["day"], weekday, phase, population)
-        if record:
-            if self.history and self.history[-1][:3] == row[:3]:
-                self.history[-1] = row
-            else:
-                self.history.append(row)
+
         self.tree.delete(*self.tree.get_children())
         for values in self.history:
             item = self.tree.insert("", "end", values=values)
@@ -412,11 +409,12 @@ class CityApp:
         self._start_from(candidate)
         self.status.set("새 도시를 불러왔습니다.")
 
-    def _start_from(self, city):
+    def _start_from(self, city, history=()):
         self.city = city
         self.baseline = deepcopy(city)
         self.has_stepped = False
-        self.history = []
+        self.history = list(history)
+        self.baseline_history = list(history) # '실험 시작으로' 누르면 돌아갈 기록
         self.refresh(record=True)
 
     def click_map(self, event):
@@ -430,12 +428,25 @@ class CityApp:
 
     def advance_day(self):
         before = deepcopy(self.city)
+        row = None
         try:
             candidate = deepcopy(before)
             if candidate["phase"] == "day":
                 candidate["phase"] = "evening"
                 badarang_rules.run_shopping(candidate) # 저녁 장보기 시뮬레이션 실행
             else:
+                evening = candidate["evening"] 
+                damaged = {tuple(cell) for cell in evening["congested_homes"] + evening["noisy_homes"]}
+                badarang_rules.update_population(candidate) # 전날 저녁 결과로 인구 한 번 갱신 
+                row = (
+                    candidate["day"],
+                    city_data.WEEKDAYS[(candidate["day"] - 1) % 7],
+                    candidate["buildings"]["M"]["resident_visitors"],
+                    candidate["evening"]["tourist_visitors"],
+                    len(evening["congested_roads"]),
+                    len(damaged),
+                    model.total_population(candidate),
+                )
                 candidate["phase"] = "day"
                 candidate["day"] += 1
                 candidate["buildings"]["M"]["resident_visitors"] = 0 # 낮에 마트 방문객 0으로 초기화
@@ -448,6 +459,9 @@ class CityApp:
         if not self.has_stepped:
             self.baseline = before
             self.has_stepped = True
+        if row is not None:
+            self.history.append(row) # 하루가 끝날 때 한 줄 기록
+        self.city = candidate
         self.city = candidate
         self.status.set(f"{city_data.time_label(self.city)}이 되었습니다.")
         self.refresh(record=True)
@@ -455,7 +469,7 @@ class CityApp:
     def reset_experiment(self):
         self.city = deepcopy(self.baseline)
         self.has_stepped = False
-        self.history = []
+        self.history = list(self.baseline_history)
         self.refresh(record=True)
         self.status.set(f"시작 상태({self.city['day']}일)로 돌아왔습니다.")
 
@@ -471,7 +485,7 @@ class CityApp:
             return
 
         try:
-            city_data.save_city(self.city, path)
+            city_data.save_city(self.city, path, self.history)
         except Exception as error:
             self._fail("저장", error)
             return
@@ -488,13 +502,12 @@ class CityApp:
             return
 
         try:
-            candidate = city_data.load_city(path)
-            city_data.validate_city(candidate)
+            candidate, history = city_data.load_city(path) # load_city에서 이미 검증하므로 validate_city 삭제
         except Exception as error:
             self._fail("불러오기", error)
             return
 
-        self._start_from(candidate)
+        self._start_from(candidate, history)
         self.status.set(f"{self.city['day']}일 상태를 불러왔습니다.")
 
 

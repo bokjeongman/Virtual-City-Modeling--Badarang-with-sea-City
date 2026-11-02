@@ -210,20 +210,30 @@ def validate_city(city):
                     raise ValueError("셀 " + repr((x, y)) + "이 다른 좌표의 건물을 참조합니다.")
 
 
-def save_city(city, path):
+def save_city(city, path, history=()):
+    """도시와 실행 기록을 함께 JSON으로 저장한다."""
     validate_city(city)
-    text = json.dumps(city, ensure_ascii=False, indent=2, allow_nan=False)
+    data = {"city": city, "history": [list(row) for row in history]}
+    text = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False)
     Path(path).write_text(text + "\n", encoding="utf-8")
 
 
 def load_city(path):
+    """(도시, 실행 기록)을 반환한다. 기록이 없는 예전 파일은 빈 기록으로 읽는다."""
     try:
-        city = json.loads(Path(path).read_text(encoding="utf-8"))
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError("UTF-8 형식의 올바른 도시 JSON 파일이 아닙니다.") from error
 
+    if type(data) is dict and set(data) == {"city", "history"}:
+        city, history = data["city"], data["history"]
+    else: # 기록 없이 도시만 저장된 예전 파일
+        city, history = data, []
+
     validate_city(city)
-    return city
+    if type(history) is not list or any(type(row) is not list or len(row) != 7 for row in history):
+        raise ValueError("history는 7칸짜리 기록 줄의 list여야 합니다.")
+    return city, [tuple(row) for row in history]
 
 WEEKDAYS = ("월", "화", "수", "목", "금", "토", "일")
 

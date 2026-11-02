@@ -6,6 +6,8 @@ from city_data import WEEKDAYS
 ENTRANCE = (0, 2) # 도시 입구 (도로 칸)
 CONGESTION_LIMIT = 12 # 한 도로 칸을 12번 이상 지나가면 혼잡
 NOISE_DISTANCE = 2 # 토요일 저녁, 숙소와 맨해튼 거리 2 이하 주거지는 소음 노출
+NEAR_MART = 10 # 마트 이동 10회 이내면 성장
+MAX_POPULATION = 10 # 주거지 한 칸 최대 인구
 
 def road_entrances(city, cells):
     """건물 칸들의 상하좌우에 붙은 도로 칸 목록. 집은 1칸, 마트는 4칸을 넣는다."""
@@ -138,3 +140,29 @@ def run_shopping(city):
         "congested_homes": congested_homes,
         "noisy_homes": noisy_homes,
     }
+
+def next_population(population, moves, damaged):
+    """
+    전날 저녁 결과로 다음 날 인구를 정한다.
+    moves: 마트까지 이동횟수, 도로로 갈 수 없으면 None
+    damaged: 혼잡 또는 소음에 노출됐으면 True
+    """
+    if moves is None or damaged: # 도로 연결 안됨, 혼잡OR소음 -> 1명 감소
+        return max(population - 1, 0) 
+    if moves <= NEAR_MART: # 마트까지 이동 10회 이내, 피해 없음 -> 1명 증가 (빈 주거지는 재건축 +1명)
+        return min(population + 1, MAX_POPULATION)
+    return population # 10회 초과, 피해 없음 -> 유지
+
+def update_population(city):
+    """전날 저녁 결과로 모든 주거지의 인구를 한 번 갱신한다. 0명이면 철거, 다시 늘면 재건축."""
+    evening = city["evening"]
+    damaged_cells = evening["congested_homes"] + evening["noisy_homes"]
+    for building in city["buildings"].values():
+        if building["kind"] != "house":
+            continue
+        damaged = [building["x"], building["y"]] in damaged_cells
+        building["population"] = next_population(
+            building["population"], building["mart_moves"], damaged
+        )
+        building["status"] = "operating" if building["population"] > 0 else "closed"
+    
