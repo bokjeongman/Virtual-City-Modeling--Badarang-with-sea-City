@@ -231,8 +231,8 @@ def load_city(path):
         city, history = data, []
 
     validate_city(city)
-    if type(history) is not list or any(type(row) is not list or len(row) != 7 for row in history):
-        raise ValueError("history는 7칸짜리 기록 줄의 list여야 합니다.")
+    if type(history) is not list or any(type(row) is not list or len(row) != 8 for row in history):
+        raise ValueError("history는 8칸짜리 기록 줄의 list여야 합니다.")
     return city, [tuple(row) for row in history]
 
 WEEKDAYS = ("월", "화", "수", "목", "금", "토", "일")

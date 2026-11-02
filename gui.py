@@ -84,6 +84,7 @@ class CityApp:
             ttk.Button(presets, text=text, command=lambda value=name: self.use_preset(value)).pack(
                 side="left", padx=(0, 6)
             )
+        ttk.Button(presets, text="28일 비교", command=self.show_comparison).pack(side="left", padx=(12, 0))
         ttk.Button(presets, text="불러오기", command=self.load_file).pack(side="right", padx=(6, 0))
         ttk.Button(presets, text="저장", command=self.save_file).pack(side="right")
         
@@ -128,7 +129,7 @@ class CityApp:
         history_frame.pack(fill="both", expand=True, pady=(10, 0))
         self.tree = ttk.Treeview(
             history_frame,
-            columns=("day", "weekday", "residents", "tourists", "congested", "damaged", "population"),
+            columns=("day", "weekday", "residents", "tourists", "congested", "noisy", "damaged", "population"),
             show="headings",
             height=5,
         )
@@ -138,8 +139,9 @@ class CityApp:
             ("residents", "주민 방문객", 75),
             ("tourists", "관광객", 55),
             ("congested", "혼잡 도로", 65),
-            ("damaged", "피해", 70),
-            ("population", "전체 인구", 80),
+            ("noisy", "소음", 50),
+            ("damaged", "피해", 50),
+            ("population", "전체 인구", 70),
         ):
             self.tree.heading(column, text=title)
             self.tree.column(column, width=width, minwidth=45, anchor="center")
@@ -224,9 +226,14 @@ class CityApp:
             "전체 인구 계산", lambda: model.total_population(deepcopy(self.city))
         )
         layout = {"beach": "해변형", "entrance": "입구형"}[self.city["layout"]]
-        visitors = self.city["buildings"]["M"]["resident_visitors"]
+        residents = self.city["buildings"]["M"]["resident_visitors"]
+        evening = self.city["evening"]
+        tourists = evening["tourist_visitors"] if evening is not None else 0 # 낮에는 0
+        congested = len(evening["congested_roads"]) if evening is not None else 0
+        noisy = len(evening["noisy_homes"]) if evening is not None else 0
         self.summary.set(
-            f"{layout} 배치   |   {city_data.time_label(self.city)}   |   인구 {population}명   |   마트 방문객 {visitors}명"
+            f"{layout}  |  {city_data.time_label(self.city)}  |  인구 {population}명  |  "
+            f"마트 방문객 {residents + tourists}명 (주민 {residents}, 관광객 {tourists})  |  혼잡 {congested}칸  |  소음 {noisy}칸"
         )
 
         self.inspector.set(self._inspector_text())
@@ -428,29 +435,9 @@ class CityApp:
 
     def advance_day(self):
         before = deepcopy(self.city)
-        row = None
         try:
             candidate = deepcopy(before)
-            if candidate["phase"] == "day":
-                candidate["phase"] = "evening"
-                badarang_rules.run_shopping(candidate) # 저녁 장보기 시뮬레이션 실행
-            else:
-                evening = candidate["evening"] 
-                damaged = {tuple(cell) for cell in evening["congested_homes"] + evening["noisy_homes"]}
-                badarang_rules.update_population(candidate) # 전날 저녁 결과로 인구 한 번 갱신 
-                row = (
-                    candidate["day"],
-                    city_data.WEEKDAYS[(candidate["day"] - 1) % 7],
-                    candidate["buildings"]["M"]["resident_visitors"],
-                    candidate["evening"]["tourist_visitors"],
-                    len(evening["congested_roads"]),
-                    len(damaged),
-                    model.total_population(candidate),
-                )
-                candidate["phase"] = "day"
-                candidate["day"] += 1
-                candidate["buildings"]["M"]["resident_visitors"] = 0 # 낮에 마트 방문객 0으로 초기화
-                candidate["evening"] = None # 저녁 장보기 기록 초기화
+            row = badarang_rules.advance_phase(candidate) # 하루가 끝나면 기록 한 줄, 아니면 None
             city_data.validate_city(candidate)
         except Exception as error:
             self._fail("시간 진행", error)
@@ -472,6 +459,69 @@ class CityApp:
         self.history = list(self.baseline_history)
         self.refresh(record=True)
         self.status.set(f"시작 상태({self.city['day']}일)로 돌아왔습니다.")
+
+    def show_comparison(self):
+        """해변형과 입구형을 각각 28일 돌려 비교 지표와 날짜별 변화를 새 창에 보여준다."""
+        layouts = ("beach", "entrance")
+        try:
+            histories = {layout: badarang_rules.run_experiment(layout) for layout in layouts}
+            results = {layout: badarang_rules.summarize(histories[layout]) for layout in layouts}
+        except Exception as error:
+            self._fail("28일 비교", error)
+            return
+        
+        window = tk.Toplevel(self.root)
+        window.title(f"{badarang_rules.EXPERIMENT_DAYS}일 비교: 해변형 vs. 입구형")
+
+        # 비교 지표 요약
+        summary = ttk.Treeview(window, columns=("metric", "beach", "entrance"), show="headings", height=10)
+        for column, title, width in (
+            ("metric", "비교 지표", 190),
+            ("beach", "해변형", 90),
+            ("entrance", "입구형", 90),
+        ):
+            summary.heading(column, text=title)
+            summary.column(column, width=width, minwidth=80, anchor="center")
+        for label, key in (
+            ("마트 방문객 (합계)", "mart_visitors"),
+            ("  └ 주민", "resident_visitors"),
+            ("  └ 관광객", "tourist_visitors"),
+            ("혼잡 도로 칸 (합계)", "congested_roads"),
+            ("혼잡 도로 칸 (하루 평균)", "congested_per_day"),
+            ("소음 노출 주거지 (합계)", "noisy_homes"),
+            ("소음 노출 주거지 (하루 평균)", "noisy_per_day"),
+            ("피해 주거지 (합계)", "damaged_homes"),
+            ("피해 주거지 (하루 평균)", "damaged_per_day"),
+            ("마지막 날 인구", "final_population"),
+        ):
+            summary.insert("", "end", values=(label, results["beach"][key], results["entrance"][key]))
+        summary.pack(fill="x", padx=12, pady=(12, 6))
+
+        # 날짜별 인구와 혼잡 도로 칸 수
+        daily = ttk.Treeview(
+            window,
+            columns=("day", "weekday", "beach_pop", "entrance_pop", "beach_cong", "entrance_cong"),
+            show="headings",
+            height=12,
+        )
+        for column, title, width in (
+            ("day", "일차", 50),
+            ("weekday", "요일", 50),
+            ("beach_pop", "해변형 인구", 90),
+            ("entrance_pop", "입구형 인구", 90),
+            ("beach_cong", "해변형 혼잡 도로", 90),
+            ("entrance_cong", "입구형 혼잡 도로", 90),
+        ):
+            daily.heading(column, text=title)
+            daily.column(column, width=width, anchor="center")
+        for beach_row, entrance_row in zip(histories["beach"], histories["entrance"]):
+            daily.insert(
+                "", "end",
+                values=(beach_row[0], beach_row[1], beach_row[7], entrance_row[7], beach_row[4], entrance_row[4])
+            )
+        daily.pack(fill="both", expand=True, padx=12, pady=(6, 12))
+
+        self.status.set("해변형과 입구형을 28일씩 실행해 비교했습니다. (현재 도시는 바뀌지 않습니다.)")
 
     def save_file(self):
         path = filedialog.asksaveasfilename(

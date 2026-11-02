@@ -1,13 +1,14 @@
 """바다랑의 장보기, 관광객 동선, 혼잡·소음 판정, 인구 갱신 규칙."""
-from model import neighbors4
+from model import neighbors4, total_population
 from traffic import bfs_path, build_road_graph
-from city_data import WEEKDAYS
+from city_data import WEEKDAYS, make_city
 
 ENTRANCE = (0, 2) # 도시 입구 (도로 칸)
 CONGESTION_LIMIT = 12 # 한 도로 칸을 12번 이상 지나가면 혼잡
 NOISE_DISTANCE = 2 # 토요일 저녁, 숙소와 맨해튼 거리 2 이하 주거지는 소음 노출
 NEAR_MART = 10 # 마트 이동 10회 이내면 성장
 MAX_POPULATION = 10 # 주거지 한 칸 최대 인구
+EXPERIMENT_DAYS = 28 # 비교 실험 기간
 
 def road_entrances(city, cells):
     """건물 칸들의 상하좌우에 붙은 도로 칸 목록. 집은 1칸, 마트는 4칸을 넣는다."""
@@ -165,4 +166,61 @@ def update_population(city):
             building["population"], building["mart_moves"], damaged
         )
         building["status"] = "operating" if building["population"] > 0 else "closed"
+
+def advance_phase(city):
+    """시간을 한 번 넘긴다. 낮->저녁이면 None, 저녁->다음 날 낮이면 그날 기록 한 줄을 반환한다."""
+    if city["phase"] == "day":
+        city["phase"] = "evening"
+        run_shopping(city) # 저녁 장보기 시뮬레이션 실행
+        return None
     
+    evening = city["evening"]
+    damaged = {tuple(cell) for cell in evening["congested_homes"] + evening["noisy_homes"]}
+    update_population(city) # 전날 저녁 결과로 인구 한 번 갱신 (evening 지우기 전에)
+    row = (
+        city["day"],
+        WEEKDAYS[(city["day"] - 1) % len(WEEKDAYS)],
+        city["buildings"]["M"]["resident_visitors"],
+        evening["tourist_visitors"],
+        len(evening["congested_roads"]),
+        len(evening["noisy_homes"]),
+        len(damaged),
+        total_population(city),
+    )
+    city["phase"] = "day"
+    city["day"] += 1
+    city["buildings"]["M"]["resident_visitors"] = 0 # 낮에 마트 방문객 0으로 초기화
+    city["evening"] = None # 저녁 장보기 기록 초기화
+    return row
+
+def run_experiment(layout, days=EXPERIMENT_DAYS):
+    """배치 하나를 1일차 월요일 낮부터 days일 동안 돌리고 하루 한 줄 기록 목록을 반환한다."""
+    city = make_city(layout)
+    history = []
+    while len(history) < days:
+        row = advance_phase(city) # 낮->저녁은 None, 저녁->낮이면 한 줄
+        if row is not None:
+            history.append(row)
+    return history
+
+def summarize(history):
+    """하루 한 줄 기록을 비교 지표 4개로 요약한다."""
+    days = len(history)
+    residents = sum(row[2] for row in history)
+    tourists = sum(row[3] for row in history)
+    congested = sum(row[4] for row in history)
+    noisy = sum(row[5] for row in history)
+    damaged = sum(row[6] for row in history)
+    return {
+        "days": days,
+        "mart_visitors": residents + tourists, # 마트 방문객 = 주민 + 관광객
+        "resident_visitors": residents,
+        "tourist_visitors": tourists,
+        "congested_roads": congested,
+        "congested_per_day": round(congested / days, 1),
+        "noisy_homes": noisy,
+        "noisy_per_day": round(noisy / days, 1),
+        "damaged_homes": damaged,
+        "damaged_per_day": round(damaged / days, 1),
+        "final_population": history[-1][7],
+    }
