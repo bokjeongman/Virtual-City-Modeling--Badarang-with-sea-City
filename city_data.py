@@ -11,7 +11,7 @@ KINDS = ("house", "lodging", "mart")
 
 
 def make_empty_city():
-    """물만 배치한 5×4 도시를 만든다. 각 셀과 행은 독립적인 객체이다."""
+    """해변과 바다만 배치한 14×10 도시를 만든다. 각 셀과 행은 독립적인 객체이다."""
     grid = []
     for y in range(HEIGHT):
         row = []
@@ -111,7 +111,7 @@ def _nonnegative_integer(value, label):
 
 def _check_position(x, y):
     if type(x) is not int or type(y) is not int:
-        raise ValueError("좌표 x, y는 정수여야 합니다.")
+        raise ValueError(f"좌표가 지도 밖입니다. x는 0~{WIDTH - 1}, y는 0~{HEIGHT - 1}입니다.")
     if not (0 <= x < WIDTH and 0 <= y < HEIGHT):
         raise ValueError("좌표가 지도 밖입니다. x는 0~4, y는 0~3입니다.")
 
@@ -131,14 +131,14 @@ def validate_city(city):
     grid = city["grid"]
     buildings = city["buildings"]
     if type(grid) is not list or len(grid) != HEIGHT:
-        raise ValueError("grid는 4개 행으로 된 list여야 합니다.")
+        raise ValueError(f"grid는 {HEIGHT}개 행으로 된 list여야 합니다.")
     if type(buildings) is not dict:
         raise ValueError("buildings는 ID를 키로 쓰는 dict여야 합니다.")
 
     seen_cells = set()
     for y, row in enumerate(grid):
         if type(row) is not list or len(row) != WIDTH:
-            raise ValueError("격자의 각 행에는 5개의 셀이 있어야 합니다.")
+            raise ValueError(f"격자의 각 행에는 {WIDTH}개의 셀이 있어야 합니다.")
         for x, cell in enumerate(row):
             label = "셀 " + repr((x, y))
             _fields(cell, ["terrain", "road", "zone", "building_id"], label)

@@ -29,7 +29,7 @@ def total_population(city):
 
 
 def occupancy(house):
-    """주택의 수용량 대비 인구 비율을 반환. 공원이거나 수용량이 0이면 None이다."""
+    """주택의 수용량 대비 인구 비율을 반환한다. 수용량이 0이면 None이다."""
     if house["capacity"] == 0:
         return None
     return house["population"] / house["capacity"]

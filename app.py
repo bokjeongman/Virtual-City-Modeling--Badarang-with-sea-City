@@ -5,7 +5,7 @@ import sys
 
 
 def main():
-    parser = argparse.ArgumentParser(description="가상 도시 / 공공서비스와 환경")
+    parser = argparse.ArgumentParser(description="바다랑: 바닷가 도시 마트 배치 시뮬레이션")
     parser.add_argument(
         "--smoke", action="store_true", help="화면 생성과 갱신을 확인한 뒤 종료합니다."
     )

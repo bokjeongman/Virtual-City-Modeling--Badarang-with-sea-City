@@ -55,8 +55,14 @@ def tourist_path(city, lodging):
     lodging_roads = road_entrances(city, [(lodging["x"], lodging["y"])])
 
     to_beach = shortest_between(graph, [ENTRANCE], beach_entrances(city))
+    if to_beach is None:
+        return None
     to_mart = shortest_between(graph, [to_beach[-1]], mart_roads)
+    if to_mart is None:
+        return None
     to_lodging = shortest_between(graph, [to_mart[-1]], lodging_roads)
+    if to_lodging is None:
+        return None
 
     return join_paths([to_beach, to_mart, to_lodging])
 
@@ -100,7 +106,10 @@ def run_shopping(city):
     if weekday == "토":
         for lodging_id in ("L1", "L2"): # 숙소 배정 일단 10명씩
             lodging = city["buildings"][lodging_id]
-            add_traffic(traffic, tourist_path(city, lodging), 10)
+            path = tourist_path(city, lodging)
+            if path is None:
+                continue
+            add_traffic(traffic, path, 10)
             lodging["guests"] = 10
             tourists += 10
     elif weekday == "일":
@@ -109,7 +118,8 @@ def run_shopping(city):
             lodging = city["buildings"][lodging_id]
             starts = road_entrances(city, [(lodging["x"], lodging["y"])])
             path = shortest_between(graph, starts, [ENTRANCE])
-            add_traffic(traffic, path, lodging["guests"])
+            if path is not None:
+                add_traffic(traffic, path, lodging["guests"])
             lodging["guests"] = 0 # 일요일 저녁에 모두 떠남.
     congested = [cell for cell, count in traffic.items() if count >= CONGESTION_LIMIT]
     congested_homes = []
@@ -223,4 +233,32 @@ def summarize(history):
         "damaged_homes": damaged,
         "damaged_per_day": round(damaged / days, 1),
         "final_population": history[-1][7],
+    }
+
+def house_changes(layout, days=EXPERIMENT_DAYS):
+    """배치 하나를 days일 돌려 주거지별 평균 인구, 마지마 날 인구, 피해 일수를 반환한다."""
+    city = make_city(layout)
+    houses = [b["id"] for b in city["buildings"].values() if b["kind"] == "house"]
+    totals = {ident: 0 for ident in houses}
+    damaged_days = {ident: 0 for ident in houses}
+
+    for _ in range(days):
+        advance_phase(city) # 낮->저녁
+        evening = city["evening"]
+        damaged = evening["congested_homes"] + evening["noisy_homes"]
+        for ident in houses:
+            house = city["buildings"][ident]
+            if [house["x"], house["y"]] in damaged:
+                damaged_days[ident] += 1
+        advance_phase(city) # 저녁->다음 날 낮 (인구 갱신)
+        for ident in houses:
+            totals[ident] += city["buildings"][ident]["population"]
+
+    return {
+        ident: {
+            "average_population": round(totals[ident] / days, 1),
+            "final_population": city["buildings"][ident]["population"],
+            "damaged_days": damaged_days[ident],
+        }
+        for ident in houses
     }

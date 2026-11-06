@@ -178,7 +178,16 @@ class CityApp:
             f"좌표 ({x}, {y})   |   {terrain}   |   도로 {'있음' if cell['road'] else '없음'}",
             f"용도지역: {zone}",
         ]
-
+        evening = self.city["evening"]
+        if evening is not None:
+            if cell["road"]:
+                count = next((n for rx, ry, n in evening["traffic"] if (rx, ry) == (x, y)), 0)
+                state = "혼잡" if [x, y] in evening["congested_roads"] else "원활"
+                lines.append(f"오늘 저녁 통행량: {count}회 ({state})")
+            if cell["zone"] == "R":
+                congested = "있음" if [x, y] in evening["congested_homes"] else "없음"
+                noisy = "있음" if [x, y] in evening["noisy_homes"] else "없음"
+                lines.append(f"혼잡 노출: {congested}   |   소음 노출: {noisy}")
         building_id = cell["building_id"]
         if building_id is None:
             lines.append("건물: 없음")
@@ -368,10 +377,10 @@ class CityApp:
             )
             c.create_text((left + right) / 2, (top + bottom) / 2 - 8, text="M", font=(family, 11, "bold"))
             c.create_text((left + right) / 2, (top + bottom) / 2 + 9, text="창고형 마트", font=(family, 8))
-        self._drawing_evening()
+        self._draw_evening()
         self._draw_time_badge()
 
-    def _drawing_evening(self):
+    def _draw_evening(self):
         """저녁 판정 결과를 지도 위에 그린다. 낮에는 아무것도 그리지 않는다."""
         evening = self.city["evening"]
         if evening is None:
@@ -384,12 +393,35 @@ class CityApp:
             cy = self.TOP + (y + 0.5) * self.CELL
             c.create_rectangle(cx - 9, cy - 9, cx + 9, cy + 9, fill="#e0483e", outline="")
 
-        # 혼잡 또는 소음에 노출된 주거 칸: 빨간 테두리
-        for x, y in evening["congested_homes"] + evening["noisy_homes"]:
+        # 혼잡에 노출된 주거 칸: 빨간 테두리
+        for x, y in evening["congested_homes"]:
             left = self.LEFT + x * self.CELL
             top = self.TOP + y * self.CELL
             c.create_rectangle(left + 2, top + 5, left+self.CELL - 2, top+self.CELL - 1, outline="#e0483e", width=2)
 
+        # 소음에 노출된 주거 칸: 빨간 테두리
+        for x, y in evening["noisy_homes"]:
+            left = self.LEFT + x * self.CELL
+            top = self.TOP + y * self.CELL
+            c.create_rectangle(left + 5, top + 8, left+self.CELL - 5, top+self.CELL - 4, outline="#7b3fb5", width=2)
+
+        # 토요일 저녁: 관광객 경로 (L1 파란선, L2 초록선)
+        if evening["tourist_visitors"] > 0:
+            for lodging_id, color, shift in (("L1", "#1d6eae", -4), ("L2", "#0f8a5f", 4)):
+                lodging = self.city["buildings"][lodging_id]
+                path = badarang_rules.tourist_path(self.city, lodging)
+                if path is None:
+                    continue
+                points = []
+                for x, y in path:
+                    points.append(self.LEFT + (x + 0.5) * self.CELL + shift)
+                    points.append(self.TOP + (y + 0.5) * self.CELL + shift)
+                c.create_line(*points, fill=color, width=2, arrow="last")
+            c.create_text(
+                self.LEFT + 6, self.TOP + 20, anchor="w",
+                text = "관광객 경로: 파란선 L1 / 초록선 L2",
+                font = (self.font_family, 9, "bold"),
+            )
     def _draw_time_badge(self):
         """지도 오른쪽 위에 지금 시간대와 요일을 크게 보여준다."""
         c = self.canvas
@@ -449,7 +481,6 @@ class CityApp:
         if row is not None:
             self.history.append(row) # 하루가 끝날 때 한 줄 기록
         self.city = candidate
-        self.city = candidate
         self.status.set(f"{city_data.time_label(self.city)}이 되었습니다.")
         self.refresh(record=True)
 
@@ -497,12 +528,43 @@ class CityApp:
             summary.insert("", "end", values=(label, results["beach"][key], results["entrance"][key]))
         summary.pack(fill="x", padx=12, pady=(12, 6))
 
+        # 주거지별 변화
+        changes = {layout: badarang_rules.house_changes(layout) for layout in layouts}
+        houses = ttk.Treeview(
+            window, 
+            columns=("house", "b_avg", "b_final", "b_damage", "e_avg", "e_final", "e_damage"),
+            show="headings",
+            height=8,
+        )
+        for column, title, width in (
+            ("house", "주거지", 60),
+            ("b_avg", "해변형 평균 인구", 80),
+            ("b_final", "해변형 마지막 날 인구", 90),
+            ("b_damage", "해변형 피해 여부", 90),
+            ("e_avg", "입구형 평균 인구", 80),
+            ("e_final", "입구형 마지막 날 인구", 90),
+            ("e_damage", "입구형 피해 여부", 90),
+        ):
+            houses.heading(column, text=title)
+            houses.column(column, width=width, anchor="center")
+        
+        for ident in changes["beach"]:
+            beach, entrance = changes["beach"][ident], changes["entrance"][ident]
+            houses.insert(
+                "", "end",
+                values=(
+                    ident, 
+                    beach["average_population"], beach["final_population"], beach["damaged_days"],
+                    entrance["average_population"], entrance["final_population"], entrance["damaged_days"],
+                ),
+            )
+        houses.pack(fill="x", padx=12, pady=6)
         # 날짜별 인구와 혼잡 도로 칸 수
         daily = ttk.Treeview(
             window,
             columns=("day", "weekday", "beach_pop", "entrance_pop", "beach_cong", "entrance_cong"),
             show="headings",
-            height=12,
+            height=7,
         )
         for column, title, width in (
             ("day", "일차", 50),
