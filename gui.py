@@ -463,7 +463,7 @@ class CityApp:
             top = self.TOP + y * self.CELL
             c.create_rectangle(left + 5, top + 8, left+self.CELL - 5, top+self.CELL - 4, outline="#7b3fb5", width=2)
 
-        # 토요일 저녁: 관광객 경로 (L1 파란선, L2 초록선)
+        # 관광객이 도착한 저녁: 관광객 경로 (L1 파란선, L2 초록선)
         if evening["tourist_visitors"] > 0:
             for lodging_id, color, shift in (("L1", "#1d6eae", -4), ("L2", "#0f8a5f", 4)):
                 lodging = self.city["buildings"][lodging_id]
@@ -609,6 +609,7 @@ class CityApp:
         if row is not None:
             self.history.append(row) # 하루가 끝날 때 한 줄 기록
         self.city = candidate
+        self.picked_lodging = None # 시간이 지나면 숙소 이동 선택 취소(1일차 낮에만 옮길 수 있음.)
         self.status.set(f"{city_data.time_label(self.city)}이 되었습니다.")
         self.refresh(record=True)
 

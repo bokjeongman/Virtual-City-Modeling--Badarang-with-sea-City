@@ -7,13 +7,13 @@ from city_data import WEEKDAYS, make_city
 
 ENTRANCE = (0, 2) # 도시 입구 (도로 칸)
 CONGESTION_LIMIT = 12 # 한 도로 칸을 12번 이상 지나가면 혼잡
-NOISE_DISTANCE = 2 # 토요일 저녁, 숙소와 맨해튼 거리 2 이하 주거지는 소음 노출
+NOISE_DISTANCE = 2 # 관광객이 도착한 저녁, 숙소와 맨해튼 거리 2 이하 주거지는 소음 노출
 NEAR_MART = 10 # 마트 이동 10회 이내면 성장
 MAX_POPULATION = 10 # 주거지 한 칸 최대 인구
 EXPERIMENT_DAYS = 28 # 비교 실험 기간
 
 DEFAULT_SETTINGS = {
-    "tourists_per_lodging": 10, # 숙소 1칸당 토요일 관광객 수
+    "tourists_per_lodging": 10, # 숙소 1칸당 관광객 수 (도착 요일마다)
     "arrival_days": ("토", ), # 관광객이 오는 요일. 다음 날 저녁에 떠난다.
     "congestion_limit": CONGESTION_LIMIT,
     "heavy_congestion_limit": 24,
