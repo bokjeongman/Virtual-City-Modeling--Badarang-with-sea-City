@@ -1,16 +1,9 @@
 """실행: python app.py"""
 
-import argparse
 import sys
 
 
 def main():
-    parser = argparse.ArgumentParser(description="바다랑: 바닷가 도시 마트 배치 시뮬레이션")
-    parser.add_argument(
-        "--smoke", action="store_true", help="화면 생성과 갱신을 확인한 뒤 종료합니다."
-    )
-    args = parser.parse_args()
-
     try:
         import tkinter
         from gui import launch
@@ -23,7 +16,7 @@ def main():
         return 1
 
     try:
-        launch(smoke=args.smoke)
+        launch()
     except tkinter.TclError as error:
         print(f"GUI를 시작할 수 없습니다: {error}", file=sys.stderr)
         print(

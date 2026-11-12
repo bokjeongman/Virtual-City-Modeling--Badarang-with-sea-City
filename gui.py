@@ -1,6 +1,7 @@
 """도시 지도와 상태를 표시하는 Tkinter GUI."""
 
 from copy import deepcopy
+from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, font as tkfont, ttk
 import traceback
@@ -14,6 +15,7 @@ class CityApp:
     CELL = 40
     LEFT = 38
     TOP = 30
+    SEASON_NAMES = {"겨울": "winter", "기본": "normal", "여름": "summer"}  # 화면 이름 -> 설정 이름
 
     def __init__(self, root):
         self.root = root
@@ -37,7 +39,10 @@ class CityApp:
         self.history = []
         self.baseline_history = []
         self._derived_error = None
-
+        self.season = tk.StringVar(value="기본")
+        self.mart_mode = tk.BooleanVar(value=False)
+        self.lodging_mode = tk.BooleanVar(value=False)
+        self.picked_lodging = None  # 숙소 이동 모드에서 고른 숙소 ID
         self._make_widgets()
         self.refresh(record=True)
 
@@ -68,7 +73,7 @@ class CityApp:
         style.configure("TButton", padding=(8, 5))
         style.configure("Treeview", rowheight=25)
         style.configure("Title.TLabel", font=(family, 18, "bold"))
-        style.configure("Stats.TLabel", font=(family, 13, "bold"))
+        style.configure("Stats.TLabel", font=(family, 12, "bold"))
 
     def _make_widgets(self):
         outer = ttk.Frame(self.root, padding=10)
@@ -85,14 +90,32 @@ class CityApp:
                 side="left", padx=(0, 6)
             )
         ttk.Button(presets, text="28일 비교", command=self.show_comparison).pack(side="left", padx=(12, 0))
+        ttk.Label(presets, text="계절").pack(side="left", padx=(12, 4))
+        season_box = ttk.Combobox(
+            presets, textvariable=self.season, values=list(self.SEASON_NAMES),
+            state="readonly", width=6,
+        )
+        season_box.pack(side="left")
+        season_box.bind("<<ComboboxSelected>>", self.change_season)
+        ttk.Checkbutton(
+            presets, text="마트 배치 모드", variable=self.mart_mode,
+            command=lambda: self._pick_mode("mart"),
+        ).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(
+            presets, text="숙소 이동 모드", variable=self.lodging_mode,
+            command=lambda: self._pick_mode("lodging"),
+        ).pack(side="left", padx=(8, 0))
         ttk.Button(presets, text="불러오기", command=self.load_file).pack(side="right", padx=(6, 0))
         ttk.Button(presets, text="저장", command=self.save_file).pack(side="right")
         
         stats = ttk.Frame(outer)
         stats.pack(fill="x", pady=(0, 7))
-        ttk.Label(stats, textvariable=self.summary, style="Stats.TLabel").pack(side="left")
         ttk.Button(stats, text="다음 시간대 >", command=self.advance_day).pack(side="right", padx=(7, 0))
         ttk.Button(stats, text="실험 시작으로", command=self.reset_experiment).pack(side="right")
+        summary_label = ttk.Label(stats, textvariable=self.summary, style="Stats.TLabel")
+        summary_label.pack(side="left", fill="x", expand=True)
+        # 남은 폭보다 글이 길면 다음 줄로 넘긴다.
+        summary_label.bind("<Configure>", lambda event: summary_label.configure(wraplength=event.width))
 
         # 상태 메시지 공간을 먼저 확보한다.
         footer = ttk.Frame(outer)
@@ -151,6 +174,25 @@ class CityApp:
         scrollbar.pack(side="right", fill="y")
         self.tree.pack(fill="both", expand=True)
 
+    def _pick_mode(self, mode):
+        """두 배치 모드 중 하나만 켜지게 한다. 모드를 바꾸면 고른 숙소는 취소한다."""
+        if mode == "mart" and self.mart_mode.get():
+            self.lodging_mode.set(False)
+        if mode == "lodging" and self.lodging_mode.get():
+            self.mart_mode.set(False)
+        self.picked_lodging = None
+        self.refresh(record=True)
+
+    def change_season(self, event=None):
+        """계절을 바꾸면 상단 요약을 갱신하고 언제부터 적용되는지 알린다."""
+        self.refresh(record=True)
+        self.status.set(f"계절을 '{self.season.get()}'(으)로 바꿨습니다. 다음 시간대와 28일 비교부터 적용됩니다.")
+
+    def _settings(self):
+        """계절 선택 상자에서 고른 계절의 설정 dict."""
+        return badarang_rules.season_settings(self.SEASON_NAMES[self.season.get()])
+
+
     def _fail(self, action, error):
         if isinstance(error, NotImplementedError):
             self.status.set(f"{action}: {str(error) or '해당 기능이 아직 구현되지 않았습니다.'}")
@@ -186,6 +228,8 @@ class CityApp:
                 lines.append(f"오늘 저녁 통행량: {count}회 ({state})")
             if cell["zone"] == "R":
                 congested = "있음" if [x, y] in evening["congested_homes"] else "없음"
+                if [x, y] in evening.get("heavy_homes", []):
+                    congested = "심함"
                 noisy = "있음" if [x, y] in evening["noisy_homes"] else "없음"
                 lines.append(f"혼잡 노출: {congested}   |   소음 노출: {noisy}")
         building_id = cell["building_id"]
@@ -207,6 +251,8 @@ class CityApp:
         if kind == "mart":
             cells = ", ".join(f"({x}, {y})" for x, y in building["cells"])
             lines.append(f"사용하는 칸: {cells}")
+            if evening is not None:
+                lines.append(f"오늘 저녁 주민 방문객: {building['resident_visitors']}명")
             return "\n".join(lines)
 
 
@@ -234,15 +280,18 @@ class CityApp:
         population = self._derived(
             "전체 인구 계산", lambda: model.total_population(deepcopy(self.city))
         )
-        layout = {"beach": "해변형", "entrance": "입구형"}[self.city["layout"]]
-        residents = self.city["buildings"]["M"]["resident_visitors"]
+        layout = {"beach": "해변형", "entrance": "입구형", "custom": "직접 배치"}.get(
+            self.city["layout"], self.city["layout"]
+        )
         evening = self.city["evening"]
+        residents = evening.get("resident_visitors", 0) if evening is not None else 0
+        mart_count = len(badarang_rules.marts(self.city))
         tourists = evening["tourist_visitors"] if evening is not None else 0 # 낮에는 0
         congested = len(evening["congested_roads"]) if evening is not None else 0
         noisy = len(evening["noisy_homes"]) if evening is not None else 0
         self.summary.set(
-            f"{layout}  |  {city_data.time_label(self.city)}  |  인구 {population}명  |  "
-            f"마트 방문객 {residents + tourists}명 (주민 {residents}, 관광객 {tourists})  |  혼잡 {congested}칸  |  소음 {noisy}칸"
+            f"{layout} (마트 {mart_count}곳)  |  계절 {self.season.get()}  |  {city_data.time_label(self.city)}  |  인구 {population}명  |  "
+            f"마트 방문객 {residents + tourists}명 (주민 {residents}, 관광객 {tourists})  |  혼잡 {congested}칸  |  소음 주거지 {noisy}곳"
         )
 
         self.inspector.set(self._inspector_text())
@@ -360,12 +409,15 @@ class CityApp:
                     else:
                         label = f"{building['population']}/{building['capacity']}"
                     c.create_text((left + right) / 2, top + 29, text=label, font=(family, 7))
+                if building_id is not None and building_id == self.picked_lodging:
+                    c.create_rectangle(  # 숙소 이동 모드에서 고른 숙소: 주황 굵은 테두리
+                        left + 1, top + 1, right - 1, bottom - 1, outline="#e07b00", width=4
+                    )
                 if self.selected == (x, y):
                     c.create_rectangle(
                         left + 2, top + 2, right - 2, bottom - 2, outline="#1d6eae", width=2
                     )
-        mart = self.city["buildings"].get("M")
-        if mart is not None:
+        for mart in badarang_rules.marts(self.city):
             xs = [x for x, _ in mart["cells"]]
             ys = [y for _, y in mart["cells"]]
             left = self.LEFT + min(xs) * self.CELL
@@ -375,7 +427,7 @@ class CityApp:
             c.create_rectangle(
                 left + 4, top + 4, right - 4, bottom - 4, fill="#f6c9b8", outline="#535b62", width=2
             )
-            c.create_text((left + right) / 2, (top + bottom) / 2 - 8, text="M", font=(family, 11, "bold"))
+            c.create_text((left + right) / 2, (top + bottom) / 2 - 8, text=mart["id"], font=(family, 11, "bold"))
             c.create_text((left + right) / 2, (top + bottom) / 2 + 9, text="창고형 마트", font=(family, 8))
         self._draw_evening()
         self._draw_time_badge()
@@ -393,13 +445,19 @@ class CityApp:
             cy = self.TOP + (y + 0.5) * self.CELL
             c.create_rectangle(cx - 9, cy - 9, cx + 9, cy + 9, fill="#e0483e", outline="")
 
-        # 혼잡에 노출된 주거 칸: 빨간 테두리
+        # 혼잡에 노출된 주거 칸: 빨간색 테두리
         for x, y in evening["congested_homes"]:
             left = self.LEFT + x * self.CELL
             top = self.TOP + y * self.CELL
             c.create_rectangle(left + 2, top + 5, left+self.CELL - 2, top+self.CELL - 1, outline="#e0483e", width=2)
 
-        # 소음에 노출된 주거 칸: 빨간 테두리
+        # 심한 혼잡에 노출된 주거 칸: 진한 빨간 굵은 테두리
+        for x, y in evening.get("heavy_homes", []):
+            left = self.LEFT + x * self.CELL
+            top = self.TOP + y * self.CELL
+            c.create_rectangle(left + 1, top + 4, left + self.CELL - 1, top + self.CELL, outline="#8f1d16", width=4)
+
+        # 소음에 노출된 주거 칸: 보라색 테두리
         for x, y in evening["noisy_homes"]:
             left = self.LEFT + x * self.CELL
             top = self.TOP + y * self.CELL
@@ -450,6 +508,7 @@ class CityApp:
 
     def _start_from(self, city, history=()):
         self.city = city
+        self.picked_lodging = None
         self.baseline = deepcopy(city)
         self.has_stepped = False
         self.history = list(history)
@@ -463,13 +522,82 @@ class CityApp:
             return
 
         self.selected = (x, y)
+        if self.mart_mode.get():
+            self.edit_mart(x, y)
+            return
+        if self.lodging_mode.get():
+            self.edit_lodging(x, y)
+            return
         self.refresh(record=True)
+
+    def edit_mart(self, x, y):
+        """배치 모드 클릭: 마트를 누르면 삭제, 빈 곳을 누르면 그 칸을 왼쪽 위로 마트 추가."""
+        if self.city["day"] != 1 or self.city["phase"] != "day":
+            self.status.set("마트는 1일차 낮에만 놓을 수 있습니다. '실험 시작으로'를 먼저 누르세요.")
+            self.refresh(record=True)
+            return
+
+        candidate = deepcopy(self.city)
+        ident = candidate["grid"][y][x]["building_id"]
+        try:
+            if ident is not None and candidate["buildings"][ident]["kind"] == "mart":
+                city_data.remove_mart(candidate, ident)
+                message = f"{ident}을(를) 지웠습니다."
+            else:
+                ident = city_data.add_mart(candidate, x, y)
+                message = f"{ident}을(를) ({x}, {y})에 놓았습니다."
+            candidate["layout"] = "custom"
+            city_data.validate_city(candidate)
+        except ValueError as error:
+            self.status.set(str(error))
+            self.refresh(record=True)
+            return
+
+        self._start_from(candidate)
+        self.status.set(message + " 이 배치가 새 실험의 시작 상태입니다.")
+
+    def edit_lodging(self, x, y):
+        """숙소 이동 모드 클릭: 숙소를 눌러 고르고, 빈 육지를 누르면 그 칸으로 옮긴다."""
+        if self.city["day"] != 1 or self.city["phase"] != "day":
+            self.status.set("숙소는 1일차 낮에만 옮길 수 있습니다. '실험 시작으로'를 먼저 누르세요.")
+            self.refresh(record=True)
+            return
+
+        ident = self.city["grid"][y][x]["building_id"]
+        if ident is not None and self.city["buildings"][ident]["kind"] == "lodging":
+            if self.picked_lodging == ident:  # 같은 숙소를 다시 누르면 취소
+                self.picked_lodging = None
+                self.status.set(f"{ident} 선택을 취소했습니다.")
+            else:
+                self.picked_lodging = ident
+                self.status.set(f"{ident}을(를) 골랐습니다. 옮길 빈 칸을 클릭하세요.")
+            self.refresh(record=True)
+            return
+
+        if self.picked_lodging is None:
+            self.status.set("먼저 옮길 숙소(L1 또는 L2)를 클릭하세요.")
+            self.refresh(record=True)
+            return
+
+        ident = self.picked_lodging
+        candidate = deepcopy(self.city)
+        try:
+            city_data.move_lodging(candidate, ident, x, y)
+            candidate["layout"] = "custom"
+            city_data.validate_city(candidate)
+        except ValueError as error:
+            self.status.set(str(error))
+            self.refresh(record=True)
+            return
+
+        self._start_from(candidate)
+        self.status.set(f"{ident}을(를) ({x}, {y})로 옮겼습니다. 이 배치가 새 실험의 시작 상태입니다.")
 
     def advance_day(self):
         before = deepcopy(self.city)
         try:
             candidate = deepcopy(before)
-            row = badarang_rules.advance_phase(candidate) # 하루가 끝나면 기록 한 줄, 아니면 None
+            row = badarang_rules.advance_phase(candidate, self._settings()) # 하루가 끝나면 기록 한 줄, 아니면 None
             city_data.validate_city(candidate)
         except Exception as error:
             self._fail("시간 진행", error)
@@ -491,29 +619,55 @@ class CityApp:
         self.refresh(record=True)
         self.status.set(f"시작 상태({self.city['day']}일)로 돌아왔습니다.")
 
+    def _custom_title(self):
+        """28일 비교의 '내 배치' 열 이름. 숙소가 기본 위치에서 옮겨졌으면 함께 적는다."""
+        count = len(badarang_rules.marts(self.baseline))
+        default = city_data.make_city()["buildings"]  # 숙소 기본 위치는 두 배치가 같다
+        moved = []
+        for ident in ("L1", "L2"):
+            lodging = self.baseline["buildings"][ident]
+            if (lodging["x"], lodging["y"]) != (default[ident]["x"], default[ident]["y"]):
+                moved.append(ident)
+        title = f"내 배치 (마트 {count}곳"
+        if moved:
+            title += ", " + "·".join(moved) + " 이동"
+        return title + ")"
+
     def show_comparison(self):
-        """해변형과 입구형을 각각 28일 돌려 비교 지표와 날짜별 변화를 새 창에 보여준다."""
-        layouts = ("beach", "entrance")
+        """현재 배치(직접 배치일 때)와 해변형·입구형을 각각 28일 돌려 새 창에 비교한다."""
+        settings = self._settings()
+        # (열 키, 화면 이름, 시작 도시 또는 배치 이름)
+        starts = []
+        if self.city["layout"] == "custom":
+            starts.append(("mine", self._custom_title(), self.baseline))
+        starts += [("beach", "해변형", "beach"), ("entrance", "입구형", "entrance")]
+        keys = [key for key, _, _ in starts]
+        titles = {key: title for key, title, _ in starts}
+        short = {"mine": "내 배치", "beach": "해변형", "entrance": "입구형"}  # 아래 두 표의 열 제목용
         try:
-            histories = {layout: badarang_rules.run_experiment(layout) for layout in layouts}
-            results = {layout: badarang_rules.summarize(histories[layout]) for layout in layouts}
+            histories = {key: badarang_rules.run_experiment(start, settings=settings) for key, _, start in starts}
+            results = {key: badarang_rules.summarize(histories[key]) for key in keys}
+            changes = {key: badarang_rules.house_changes(start, settings=settings) for key, _, start in starts}
+            mart_use = {key: badarang_rules.mart_totals(start, settings=settings) for key, _, start in starts}
         except Exception as error:
             self._fail("28일 비교", error)
             return
-        
-        window = tk.Toplevel(self.root)
-        window.title(f"{badarang_rules.EXPERIMENT_DAYS}일 비교: 해변형 vs. 입구형")
 
-        # 비교 지표 요약
-        summary = ttk.Treeview(window, columns=("metric", "beach", "entrance"), show="headings", height=10)
-        for column, title, width in (
-            ("metric", "비교 지표", 190),
-            ("beach", "해변형", 90),
-            ("entrance", "입구형", 90),
-        ):
-            summary.heading(column, text=title)
-            summary.column(column, width=width, minwidth=80, anchor="center")
-        for label, key in (
+        window = tk.Toplevel(self.root)
+        window.title(
+            f"{badarang_rules.EXPERIMENT_DAYS}일 비교 ({self.season.get()}): "
+            + " vs. ".join(titles[key] for key in keys)
+        )
+
+        # 비교 지표 요약 (마트별 주민 방문객 줄은 마트 수만큼 늘어난다)
+        mart_ids = sorted({ident for key in keys for ident in mart_use[key]})
+        summary = ttk.Treeview(window, columns=["metric"] + keys, show="headings", height=10 + len(mart_ids))
+        summary.heading("metric", text="비교 지표")
+        summary.column("metric", width=190, anchor="center")
+        for key in keys:
+            summary.heading(key, text=titles[key])
+            summary.column(key, width=120, minwidth=80, anchor="center")
+        for label, metric in (
             ("마트 방문객 (합계)", "mart_visitors"),
             ("  └ 주민", "resident_visitors"),
             ("  └ 관광객", "tourist_visitors"),
@@ -525,65 +679,57 @@ class CityApp:
             ("피해 주거지 (하루 평균)", "damaged_per_day"),
             ("마지막 날 인구", "final_population"),
         ):
-            summary.insert("", "end", values=(label, results["beach"][key], results["entrance"][key]))
+            summary.insert("", "end", values=[label] + [results[key][metric] for key in keys])
+        for number, ident in enumerate(mart_ids): # '└ 주민' 줄 바로 아래에 마트별로 넣는다
+            values = [f"      · {ident} 주민"]
+            for key in keys:
+                if ident in mart_use[key]:
+                    (x, y), total = mart_use[key][ident]
+                    values.append(f"{total} ({x},{y})")
+                else:
+                    values.append("—") # 이 배치에는 없는 마트
+            summary.insert("", 2 + number, values=values)
         summary.pack(fill="x", padx=12, pady=(12, 6))
 
-        # 주거지별 변화
-        changes = {layout: badarang_rules.house_changes(layout) for layout in layouts}
-        houses = ttk.Treeview(
-            window, 
-            columns=("house", "b_avg", "b_final", "b_damage", "e_avg", "e_final", "e_damage"),
-            show="headings",
-            height=8,
-        )
-        for column, title, width in (
-            ("house", "주거지", 60),
-            ("b_avg", "해변형 평균 인구", 80),
-            ("b_final", "해변형 마지막 날 인구", 90),
-            ("b_damage", "해변형 피해 여부", 90),
-            ("e_avg", "입구형 평균 인구", 80),
-            ("e_final", "입구형 마지막 날 인구", 90),
-            ("e_damage", "입구형 피해 여부", 90),
-        ):
-            houses.heading(column, text=title)
-            houses.column(column, width=width, anchor="center")
-        
-        for ident in changes["beach"]:
-            beach, entrance = changes["beach"][ident], changes["entrance"][ident]
-            houses.insert(
-                "", "end",
-                values=(
-                    ident, 
-                    beach["average_population"], beach["final_population"], beach["damaged_days"],
-                    entrance["average_population"], entrance["final_population"], entrance["damaged_days"],
-                ),
-            )
+        # 주거지별 변화: 배치마다 평균 인구 / 마지막 날 인구 / 피해 일수
+        fields = (("avg", "평균 인구", "average_population"),
+                  ("final", "마지막 날", "final_population"),
+                  ("damage", "피해 일수", "damaged_days"))
+        columns = ["house"] + [f"{key}_{field}" for key in keys for field, _, _ in fields]
+        houses = ttk.Treeview(window, columns=columns, show="headings", height=8)
+        houses.heading("house", text="주거지")
+        houses.column("house", width=60, anchor="center")
+        for key in keys:
+            for field, text, _ in fields:
+                houses.heading(f"{key}_{field}", text=f"{short[key]} {text}")
+                houses.column(f"{key}_{field}", width=95, anchor="center")
+        for ident in changes[keys[0]]:
+            values = [ident]
+            for key in keys:
+                values += [changes[key][ident][name] for _, _, name in fields]
+            houses.insert("", "end", values=values)
         houses.pack(fill="x", padx=12, pady=6)
+
         # 날짜별 인구와 혼잡 도로 칸 수
-        daily = ttk.Treeview(
-            window,
-            columns=("day", "weekday", "beach_pop", "entrance_pop", "beach_cong", "entrance_cong"),
-            show="headings",
-            height=7,
-        )
-        for column, title, width in (
-            ("day", "일차", 50),
-            ("weekday", "요일", 50),
-            ("beach_pop", "해변형 인구", 90),
-            ("entrance_pop", "입구형 인구", 90),
-            ("beach_cong", "해변형 혼잡 도로", 90),
-            ("entrance_cong", "입구형 혼잡 도로", 90),
-        ):
-            daily.heading(column, text=title)
-            daily.column(column, width=width, anchor="center")
-        for beach_row, entrance_row in zip(histories["beach"], histories["entrance"]):
+        columns = ["day", "weekday"] + [f"{key}_pop" for key in keys] + [f"{key}_cong" for key in keys]
+        daily = ttk.Treeview(window, columns=columns, show="headings", height=7)
+        daily.heading("day", text="일차")
+        daily.heading("weekday", text="요일")
+        daily.column("day", width=50, anchor="center")
+        daily.column("weekday", width=50, anchor="center")
+        for key in keys:
+            daily.heading(f"{key}_pop", text=f"{short[key]} 인구")
+            daily.heading(f"{key}_cong", text=f"{short[key]} 혼잡 도로")
+            daily.column(f"{key}_pop", width=110, anchor="center")
+            daily.column(f"{key}_cong", width=110, anchor="center")
+        for rows in zip(*(histories[key] for key in keys)):
             daily.insert(
                 "", "end",
-                values=(beach_row[0], beach_row[1], beach_row[7], entrance_row[7], beach_row[4], entrance_row[4])
+                values=[rows[0][0], rows[0][1]] + [row[7] for row in rows] + [row[4] for row in rows],
             )
         daily.pack(fill="both", expand=True, padx=12, pady=(6, 12))
 
-        self.status.set("해변형과 입구형을 28일씩 실행해 비교했습니다. (현재 도시는 바뀌지 않습니다.)")
+        self.status.set("28일 비교를 새 창에 표시했습니다. (현재 도시는 바뀌지 않습니다.)")
 
     def save_file(self):
         path = filedialog.asksaveasfilename(
@@ -597,12 +743,12 @@ class CityApp:
             return
 
         try:
-            city_data.save_city(self.city, path, self.history)
+            city_data.save_city(self.city, path, self.history, self.SEASON_NAMES[self.season.get()])
         except Exception as error:
             self._fail("저장", error)
             return
 
-        self.status.set("도시를 저장했습니다.")
+        self.status.set(f"'{Path(path).name}'에 저장했습니다. ({self.city['day']}일차, 계절 {self.season.get()})")
 
     def load_file(self):
         path = filedialog.askopenfilename(
@@ -614,22 +760,18 @@ class CityApp:
             return
 
         try:
-            candidate, history = city_data.load_city(path) # load_city에서 이미 검증하므로 validate_city 삭제
+            candidate, history, season = city_data.load_city(path) 
         except Exception as error:
             self._fail("불러오기", error)
             return
 
+        names = {key: name for name, key in self.SEASON_NAMES.items()}  # 설정 이름 -> 화면 이름
+        self.season.set(names[season])  # 저장할 때의 계절로 되돌린다
         self._start_from(candidate, history)
-        self.status.set(f"{self.city['day']}일 상태를 불러왔습니다.")
+        self.status.set(f"'{Path(path).name}'에서 {self.city['day']}일차 상태를 불러왔습니다. (계절 {self.season.get()})")
 
 
-def launch(smoke=False):
+def launch():
     root = tk.Tk()
     CityApp(root)
-    if smoke:
-        root.update_idletasks()
-        root.update()
-        root.destroy()
-        print("GUI smoke: Tk 창 생성과 최초 화면 갱신 성공")
-    else:
-        root.mainloop()
+    root.mainloop()
