@@ -6,7 +6,7 @@ from city_data import WEEKDAYS, make_city
 
 
 ENTRANCE = (0, 2) # 도시 입구 (도로 칸)
-CONGESTION_LIMIT = 12 # 한 도로 칸을 12번 이상 지나가면 혼잡
+CONGESTION_LIMIT = 12 # 한 도로 칸을 12번 지날 때마다 혼잡 피해 1단계 (12회 −1명, 24회 −2명, 36회 −3명 …)
 NOISE_DISTANCE = 2 # 관광객이 도착한 저녁, 숙소와 맨해튼 거리 2 이하 주거지는 소음 노출
 NEAR_MART = 10 # 마트 이동 10회 이내면 성장
 MAX_POPULATION = 10 # 주거지 한 칸 최대 인구
@@ -16,7 +16,7 @@ DEFAULT_SETTINGS = {
     "tourists_per_lodging": 10, # 숙소 1칸당 관광객 수 (도착 요일마다)
     "arrival_days": ("토", ), # 관광객이 오는 요일. 다음 날 저녁에 떠난다.
     "congestion_limit": CONGESTION_LIMIT,
-    "heavy_congestion_limit": 24,
+    "heavy_congestion_limit": 24, # 지도에 '심한 혼잡'으로 표시하는 기준 (피해는 통행량 // congestion_limit)
     "noise_distance": NOISE_DISTANCE,
     "near_mart": NEAR_MART,
 }
@@ -85,22 +85,26 @@ def join_paths(paths):
         result.extend(path)
     return result
 
-def tourist_path(city, lodging):
-    """관광객 경로: 입구->해수욕장->가장 가까운 마트->숙소 세 구간"""
+def tourist_route(city, lodging):
+    """관광객 경로와 들른 마트: 입구->해수욕장->가장 가까운 마트->숙소. 갈 수 없으면 (None, None)"""
     graph = build_road_graph(city)
     lodging_roads = road_entrances(city, [(lodging["x"], lodging["y"])])
 
     to_beach = shortest_between(graph, [ENTRANCE], beach_entrances(city))
     if to_beach is None:
-        return None
+        return None, None
     to_mart = shortest_between(graph, [to_beach[-1]], mart_roads(city))
     if to_mart is None:
-        return None
+        return None, None
     to_lodging = shortest_between(graph, [to_mart[-1]], lodging_roads)
     if to_lodging is None:
-        return None
+        return None, None
 
-    return join_paths([to_beach, to_mart, to_lodging])
+    return join_paths([to_beach, to_mart, to_lodging]), mart_at_road(city, to_mart[-1])
+
+def tourist_path(city, lodging):
+    """관광객 경로: 입구->해수욕장->가장 가까운 마트->숙소 세 구간"""
+    return tourist_route(city, lodging)[0]
 
 def shopping_path(city, house):
     """집에서 가장 가까운 마트까지의 도로 경로. 갈 수 없으면 None"""
@@ -126,6 +130,7 @@ def run_shopping(city, settings=DEFAULT_SETTINGS):
     traffic = {}
     for mart in marts(city):          # 마트별 방문객 초기화
         mart["resident_visitors"] = 0
+        mart["tourist_visitors"] = 0
     for building in city["buildings"].values():
         if building["kind"] != "house":
             continue
@@ -157,21 +162,27 @@ def run_shopping(city, settings=DEFAULT_SETTINGS):
     if weekday in settings["arrival_days"]:
         for lodging_id in ("L1", "L2"): # 숙소마다 settings에 정한 인원을 배정
             lodging = city["buildings"][lodging_id]
-            path = tourist_path(city, lodging)
+            path, mart = tourist_route(city, lodging)
             if path is None:
                 continue
             count = settings["tourists_per_lodging"]
             add_traffic(traffic, path, count)
             lodging["guests"] = count
+            mart["tourist_visitors"] += count # 관광객이 들른 마트에 기록
             tourists += count
     congested = [cell for cell, count in traffic.items() if count >= settings["congestion_limit"]]
     heavy = [cell for cell, n in traffic.items() if n >= settings["heavy_congestion_limit"]]
     congested_homes = []
     heavy_homes = []
+    congestion_levels = [] # [x, y, 피해 단계]: 맞닿은 도로 최대 통행량 // congestion_limit
     for y, row in enumerate(city["grid"]):
         for x, cell in enumerate(row):
             if cell["zone"] != "R": # R이 아닌 칸은 건너뜀
                 continue
+            busiest = max([traffic.get((nx, ny), 0) for nx, ny in neighbors4(city, x, y)] or [0])
+            level = busiest // settings["congestion_limit"]
+            if level > 0:
+                congestion_levels.append([x, y, level])
             for nx, ny in neighbors4(city, x, y):
                 if (nx, ny) in congested:
                     congested_homes.append([x, y])
@@ -202,13 +213,14 @@ def run_shopping(city, settings=DEFAULT_SETTINGS):
         "congested_homes": congested_homes,
         "heavy_homes": heavy_homes,
         "noisy_homes": noisy_homes,
+        "congestion_levels": congestion_levels,
     }
 
 def next_population(population, moves, damage, near_mart=NEAR_MART):
     """
     전날 저녁 결과로 다음 날 인구를 정한다.
     moves: 마트까지 이동횟수, 도로로 갈 수 없으면 None
-    damage: 감소할 인원. 피해 없음 0, 혼잡·소음 1, 심한 혼잡 2
+    damage: 감소할 인원. 피해 없음 0, 소음 1, 혼잡은 통행 12회마다 1 (12회 1, 24회 2, 36회 3 …)
     """
     if moves is None: # 도로 연결 안됨 -> 최소 1명 감소
         damage = max(damage, 1)
@@ -221,17 +233,20 @@ def next_population(population, moves, damage, near_mart=NEAR_MART):
 def update_population(city, settings=DEFAULT_SETTINGS):
     """전날 저녁 결과로 모든 주거지의 인구를 한 번 갱신한다. 0명이면 철거, 다시 늘면 재건축."""
     evening = city["evening"]
-    damaged_cells = evening["congested_homes"] + evening["noisy_homes"]
-    heavy_cells = evening.get("heavy_homes", []) # 예전 저장 파일에는 없을 수 있음
+    levels = {(x, y): n for x, y, n in evening.get("congestion_levels", [])}
+    old_file = "congestion_levels" not in evening # 예전 저장 파일: 혼잡 1명, 심한 혼잡 2명
     for building in city["buildings"].values():
         if building["kind"] != "house":
             continue
         cell = [building["x"], building["y"]]
-        damage = 0
-        if cell in damaged_cells: # 혼잡 또는 소음 -> 1명
-            damage = 1
-        if cell in heavy_cells: # 심한 혼잡 -> 2명
-            damage = 2
+        damage = levels.get((building["x"], building["y"]), 0) # 통행 12회마다 1명
+        if old_file:
+            if cell in evening["congested_homes"]:
+                damage = 1
+            if cell in evening.get("heavy_homes", []):
+                damage = 2
+        if cell in evening["noisy_homes"]: # 소음 -> 최소 1명
+            damage = max(damage, 1)
         building["population"] = next_population(
             building["population"], building["mart_moves"], damage, settings["near_mart"]
         )
@@ -261,6 +276,7 @@ def advance_phase(city, settings=DEFAULT_SETTINGS):
     city["day"] += 1
     for mart in marts(city):
         mart["resident_visitors"] = 0 # 낮에 마트 방문객 0으로 초기화
+        mart["tourist_visitors"] = 0
     city["evening"] = None # 저녁 장보기 기록 초기화
     return row
 
@@ -333,15 +349,17 @@ def house_changes(start, days=EXPERIMENT_DAYS, settings=DEFAULT_SETTINGS):
 
 
 def mart_totals(start, days=EXPERIMENT_DAYS, settings=DEFAULT_SETTINGS):
-    """시작 도시(또는 배치 이름)를 days일 돌려 마트별 주민 방문객 합계를 반환한다.
-    {마트 ID: ((왼쪽 위 x, y), 합계)}"""
+    """시작 도시(또는 배치 이름)를 days일 돌려 마트별 방문객 합계를 반환한다.
+    {마트 ID: ((왼쪽 위 x, y), 주민 합계, 관광객 합계)}"""
     if days < 1:
         raise ValueError("실험 기간(days)은 1일 이상이어야 합니다.")
     city = make_city(start) if type(start) is str else deepcopy(start)
-    totals = {mart["id"]: 0 for mart in marts(city)}
+    residents = {mart["id"]: 0 for mart in marts(city)}
+    tourists = {mart["id"]: 0 for mart in marts(city)}
     for _ in range(days):
-        advance_phase(city, settings) # 낮->저녁 (장보기)
+        advance_phase(city, settings) # 낮->저녁 (장보기, 관광객 이동)
         for mart in marts(city):
-            totals[mart["id"]] += mart["resident_visitors"]
+            residents[mart["id"]] += mart["resident_visitors"]
+            tourists[mart["id"]] += mart["tourist_visitors"]
         advance_phase(city, settings) # 저녁->다음 날 낮
-    return {mart["id"]: ((mart["x"], mart["y"]), totals[mart["id"]]) for mart in marts(city)}
+    return {mart["id"]: ((mart["x"], mart["y"]), residents[mart["id"]], tourists[mart["id"]]) for mart in marts(city)}

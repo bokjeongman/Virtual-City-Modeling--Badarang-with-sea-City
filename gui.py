@@ -231,7 +231,8 @@ class CityApp:
                 if [x, y] in evening.get("heavy_homes", []):
                     congested = "심함"
                 noisy = "있음" if [x, y] in evening["noisy_homes"] else "없음"
-                lines.append(f"혼잡 노출: {congested}   |   소음 노출: {noisy}")
+                level = next((n for hx, hy, n in evening.get("congestion_levels", []) if (hx, hy) == (x, y)), 0)
+                lines.append(f"혼잡 노출: {congested} (피해 {level}단계)   |   소음 노출: {noisy}")
         building_id = cell["building_id"]
         if building_id is None:
             lines.append("건물: 없음")
@@ -252,7 +253,7 @@ class CityApp:
             cells = ", ".join(f"({x}, {y})" for x, y in building["cells"])
             lines.append(f"사용하는 칸: {cells}")
             if evening is not None:
-                lines.append(f"오늘 저녁 주민 방문객: {building['resident_visitors']}명")
+                lines.append(f"오늘 저녁 방문객: 주민 {building['resident_visitors']}명, 관광객 {building['tourist_visitors']}명")
             return "\n".join(lines)
 
 
@@ -660,7 +661,7 @@ class CityApp:
             + " vs. ".join(titles[key] for key in keys)
         )
 
-        # 비교 지표 요약 (마트별 주민 방문객 줄은 마트 수만큼 늘어난다)
+        # 비교 지표 요약 (마트별 방문객 줄은 마트 수만큼 늘어난다)
         mart_ids = sorted({ident for key in keys for ident in mart_use[key]})
         summary = ttk.Treeview(window, columns=["metric"] + keys, show="headings", height=10 + len(mart_ids))
         summary.heading("metric", text="비교 지표")
@@ -681,15 +682,15 @@ class CityApp:
             ("마지막 날 인구", "final_population"),
         ):
             summary.insert("", "end", values=[label] + [results[key][metric] for key in keys])
-        for number, ident in enumerate(mart_ids): # '└ 주민' 줄 바로 아래에 마트별로 넣는다
-            values = [f"      · {ident} 주민"]
+        for number, ident in enumerate(mart_ids): # '└ 관광객' 줄 바로 아래에 마트별로 넣는다
+            values = [f"      · {ident} 주민+관광객"]
             for key in keys:
                 if ident in mart_use[key]:
-                    (x, y), total = mart_use[key][ident]
-                    values.append(f"{total} ({x},{y})")
+                    (x, y), residents, tourists = mart_use[key][ident]
+                    values.append(f"{residents}+{tourists} ({x},{y})")
                 else:
                     values.append("—") # 이 배치에는 없는 마트
-            summary.insert("", 2 + number, values=values)
+            summary.insert("", 3 + number, values=values)
         summary.pack(fill="x", padx=12, pady=(12, 6))
 
         # 주거지별 변화: 배치마다 평균 인구 / 마지막 날 인구 / 피해 일수

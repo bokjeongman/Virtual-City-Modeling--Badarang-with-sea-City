@@ -12,7 +12,7 @@ SEASON_KEYS = ("winter", "normal", "summer")
 
 
 def make_empty_city():
-    """해변과 바다만 배치한 14×10 도시를 만든다. 각 셀과 행은 독립적인 객체이다."""
+    """해변과 바다만 배치한 14x10 도시를 만든다. 각 셀과 행은 독립적인 객체이다."""
     grid = []
     for y in range(HEIGHT):
         row = []
@@ -40,11 +40,11 @@ MART_PRESETS = {
 }
 
 def mart_cells(x, y):
-    """왼쪽 위가 (x, y)인 2×2 마트 칸 목록."""
+    """왼쪽 위가 (x, y)인 2x2 마트 칸 목록."""
     return [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]
 
 def can_place_mart(city, x, y):
-    """2×2 칸이 모두 지도 안의 빈 육지(도로·용도지역·건물 없음)면 True."""
+    """2x2 칸이 모두 지도 안의 빈 육지(도로·용도지역·건물 없음)면 True."""
     for cx, cy in mart_cells(x, y):
         if not (0 <= cx < WIDTH and 0 <= cy < HEIGHT):
             return False
@@ -64,7 +64,7 @@ def add_mart(city, x, y):
     cells = mart_cells(x, y)
     city["buildings"][ident] = {
         "id": ident, "kind": "mart", "x": x, "y": y, "cells": cells,
-        "status": "operating", "resident_visitors": 0,
+        "status": "operating", "resident_visitors": 0, "tourist_visitors": 0,
     }
     for cx, cy in cells:
         city["grid"][cy][cx]["building_id"] = ident
@@ -226,7 +226,7 @@ def validate_city(city):
         elif kind == "lodging":
             names += ["guests", "capacity"]
         elif kind == "mart":
-            names += ["cells", "resident_visitors"]
+            names += ["cells", "resident_visitors", "tourist_visitors"]
         _fields(building, names, "건물 " + ident)
         if building["id"] != ident:
             raise ValueError("buildings의 키와 건물의 id가 다릅니다: " + ident)
@@ -279,6 +279,10 @@ def load_city(path):
     else: # 기록 없이 도시만 저장된 예전 파일
         city, history = data, []
 
+    if type(city) is dict and type(city.get("buildings")) is dict:
+        for building in city["buildings"].values(): # 관광객 마트별 집계 이전 파일은 0으로 채움
+            if type(building) is dict and building.get("kind") == "mart":
+                building.setdefault("tourist_visitors", 0)
     validate_city(city)
     if type(history) is not list or any(type(row) is not list or len(row) != 8 for row in history):
         raise ValueError("history는 8칸짜리 기록 줄의 list여야 합니다.")
