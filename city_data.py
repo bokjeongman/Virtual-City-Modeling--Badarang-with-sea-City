@@ -12,7 +12,7 @@ SEASON_KEYS = ("winter", "normal", "summer")
 
 
 def make_empty_city():
-    """해변과 바다만 배치한 14x10 도시를 만든다. 각 셀과 행은 독립적인 객체이다."""
+    """해변과 바다만 배치한 14×10 도시를 만든다. 각 셀과 행은 독립적인 객체이다."""
     grid = []
     for y in range(HEIGHT):
         row = []
@@ -40,11 +40,11 @@ MART_PRESETS = {
 }
 
 def mart_cells(x, y):
-    """왼쪽 위가 (x, y)인 2x2 마트 칸 목록."""
+    """왼쪽 위가 (x, y)인 2×2 마트 칸 목록."""
     return [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]
 
 def can_place_mart(city, x, y):
-    """2x2 칸이 모두 지도 안의 빈 육지(도로·용도지역·건물 없음)면 True."""
+    """2×2 칸이 모두 지도 안의 빈 육지(도로·용도지역·건물 없음)면 True."""
     for cx, cy in mart_cells(x, y):
         if not (0 <= cx < WIDTH and 0 <= cy < HEIGHT):
             return False
